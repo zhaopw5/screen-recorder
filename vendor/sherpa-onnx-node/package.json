@@ -1,0 +1,21 @@
+{
+  "name": "sherpa-onnx-node",
+  "version": "1.13.8",
+  "description": "Speech-to-text, text-to-speech, speaker diarization, and speech enhancement using Next-gen Kaldi without internet connection",
+  "main": "sherpa-onnx.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/csukuangfj/sherpa-onnx.git"
+  },
+  "author": "The next-gen Kaldi team",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/csukuangfj/sherpa-onnx#readme",
+  "optionalDependencies": {
+    "sherpa-onnx-darwin-arm64": "^1.13.8",
+    "sherpa-onnx-darwin-x64": "^1.13.8",
+    "sherpa-onnx-linux-x64": "^1.13.8",
+    "sherpa-onnx-linux-arm64": "^1.13.8",
+    "sherpa-onnx-win-x64": "^1.13.8",
+    "sherpa-onnx-win-ia32": "^1.13.8"
+  }
+}

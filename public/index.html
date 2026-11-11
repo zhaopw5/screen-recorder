@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DeepSeek 录屏助手</title>
+<link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo"><span></span></div>
+      <div class="brand-text">
+        <h1>录屏助手</h1>
+        <p>屏幕 + 系统声音 · 本地转写 · AI 边录边记</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <span id="llmBadge" class="badge badge-wait">检测中…</span>
+      <button id="btnSettings" class="ghost">设置</button>
+      <button id="btnHistory" class="ghost">历史录制</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="stage">
+      <div class="preview-wrap" id="previewWrap">
+        <video id="preview" muted playsinline></video>
+        <div class="placeholder" id="placeholder">
+          <div class="ph-icon">⏺</div>
+          <h2>把线上会议的画面和声音一起录下来</h2>
+          <p>点「开始录制」后，选择 <b>整个屏幕</b>，并勾选 <b>同时分享系统音频</b>。<br />这样电脑里播放的声音（会议、视频、直播）才会被录进去。</p>
+          <div class="ph-steps">
+            <span>1 选整个屏幕</span><i>→</i><span>2 勾选系统音频</span><i>→</i><span>3 点分享</span>
+          </div>
+        </div>
+        <div class="rec-badge" id="recBadge" hidden><span class="dot"></span>REC<span id="timer">00:00</span></div>
+        <div class="screen-flags" id="screenFlags" hidden>
+          <span id="flagSys" class="flag">系统声音</span>
+          <span id="flagMic" class="flag">麦克风</span>
+        </div>
+        <div class="pause-veil" id="pauseVeil" hidden>已暂停</div>
+      </div>
+
+      <div class="meter-row">
+        <div class="meter"><div class="meter-fill" id="meterFill"></div><div class="meter-peak" id="meterPeak"></div></div>
+        <div class="meter-label" id="meterLabel">-∞ dB</div>
+        <div class="meter-tip" id="meterTip"></div>
+      </div>
+
+      <div class="controls">
+        <button id="btnStart" class="primary">开始录制</button>
+        <button id="btnPause" class="ghost" disabled>暂停</button>
+        <button id="btnStop" class="danger" disabled>结束并生成纪要</button>
+        <div class="spacer"></div>
+        <label class="switch" title="把自己的声音也录进去（建议戴耳机，避免回声）">
+          <input type="checkbox" id="optMic" checked /><span>麦克风</span>
+        </label>
+        <select id="optQuality" title="画质">
+          <option value="high">高清 1080p·30fps</option>
+          <option value="std" selected>标准 1080p·15fps</option>
+          <option value="lite">轻量 720p·15fps</option>
+        </select>
+      </div>
+      <p class="hint" id="hint">提示：录制时请保持本页面打开；会议软件里的声音不要静音。戴耳机可以避免"对方的回声被麦克风二次录入"。</p>
+    </section>
+
+    <aside class="side">
+      <div class="tabs">
+        <button class="tab active" data-tab="transcript">实时字幕</button>
+        <button class="tab" data-tab="summary">AI 纪要</button>
+        <button class="tab" data-tab="ask">提问</button>
+      </div>
+      <div class="tab-body" id="tab-transcript">
+        <div id="transcript" class="transcript">
+          <div class="empty">开始录制后，这里会实时出现文字，按说话停顿自动断句。</div>
+        </div>
+      </div>
+      <div class="tab-body" id="tab-summary" hidden>
+        <div id="summary" class="markdown">
+          <div class="empty">AI 会边录边整理纪要，大约每 30 秒刷新一次。</div>
+        </div>
+      </div>
+      <div class="tab-body" id="tab-ask" hidden>
+        <div id="chat" class="chat">
+          <div class="empty">录屏过程中可以随时提问，例如「刚才说的预算是多少？」「总结一下前十分钟」。</div>
+        </div>
+        <form id="askForm" class="ask-form">
+          <textarea id="askInput" rows="2" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+          <button type="submit" id="btnAsk">发送</button>
+        </form>
+      </div>
+      <div class="statusbar">
+        <span id="statusText">待机</span>
+        <span id="segCount">0 句</span>
+      </div>
+    </aside>
+  </main>
+
+  <div class="modal" id="modal" hidden>
+    <div class="modal-card" id="modalCard"></div>
+  </div>
+  <div class="toasts" id="toasts"></div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

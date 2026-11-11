@@ -1,0 +1,24 @@
+{
+  "name": "screen-recorder-ai",
+  "version": "1.4.0",
+  "private": true,
+  "type": "module",
+  "description": "Windows 录屏 + 系统声音 + 本地 SenseVoice 转写 + AI 会议纪要",
+  "main": "electron/main.cjs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhaopw5/screen-recorder.git"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "app": "electron .",
+    "build": "powershell -NoProfile -ExecutionPolicy Bypass -File build-app.ps1"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "electron": "^45.2.3"
+  }
+}
+
