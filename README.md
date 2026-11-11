@@ -4,7 +4,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-![App](docs/app.png)
+![App](docs/home-en.png)
 
 Records your screen together with whatever your PC is playing — online meetings, videos, livestreams — transcribes it locally in real time, and has an LLM write meeting notes while recording. You can ask the AI questions mid-recording. Audio and video never leave your machine; speech recognition is fully offline.
 
@@ -20,6 +20,7 @@ Records your screen together with whatever your PC is playing — online meeting
 - **Complete output**: `recording.mp4` (H.264/AAC, seekable) + `transcript.md` + `summary.md` + poster
 - **History**: built-in list; regenerate notes for any recording
 - **Two shapes**: Electron desktop app, or a local web UI
+- **Bilingual UI**: English / 简体中文, switchable in Settings — AI notes and Q&A follow the UI language
 
 ---
 
@@ -44,8 +45,6 @@ This project takes the third path: the Electron main process returns the screen 
 - Windows 10 / 11 (x64)
 - Node.js 20+ (build/development only — the packaged app bundles its own runtime)
 - ~1 GB of disk for source + dependencies (228 MB speech model, 110 MB ffmpeg, Electron)
-
-The UI is currently in Chinese.
 
 ---
 
@@ -126,6 +125,8 @@ Headphones are recommended: with speakers, the microphone picks up the audio aga
 
 **Settings → API Key / Base URL / Model**, then **Test connection** before saving.
 
+![Settings](docs/settings-en.png)
+
 Any OpenAI-compatible endpoint works, including a local Ollama (`http://127.0.0.1:11434/v1`).
 
 Environment variables take precedence:
@@ -202,7 +203,6 @@ Electron window (bundled Chromium)
 - Closing the window interrupts recording (chunks remain on disk but are not merged automatically)
 - Windows only; macOS/Linux would need a different screen-audio path
 - DRM-protected content cannot be captured
-- The UI is Chinese-only for now
 
 ---
 

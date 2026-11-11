@@ -172,7 +172,35 @@ function fullTranscript(session) {
 
 // ---------------------------------------------------------------- AI 总结
 
-const SUMMARY_SYSTEM = `你是一名专业的中文会议速记员。你会收到一场线上会议（录屏）的实时转写片段。
+/** 界面语言（存在配置里），决定纪要/逐字稿用中文还是英文。 */
+function uiLocale() {
+  return readConfigFile().locale === 'en' ? 'en' : 'zh-CN';
+}
+const L = (zh, en, locale) => ((locale || uiLocale()) === 'en' ? en : zh);
+
+function summarySystem(locale) {
+  if (locale === 'en') {
+    return `You are a professional meeting note-taker. You receive live transcript chunks from a recorded online meeting.
+Produce rolling meeting notes in English, in Markdown, strictly following this structure, keeping every section short:
+
+## One-line summary
+(max 60 words)
+
+## Key points
+- 3–8 short bullets grouped by topic; do not repeat the transcript sentence by sentence
+
+## Decisions
+- If none, write "None yet"
+
+## Action items
+- Format: task — owner (or "TBD") — due date (or "Not set")
+
+## Open questions
+- If none, write "None yet"
+
+Output only the notes: no preamble, no pleasantries. Merge duplicates and keep concrete numbers, dates, names and product names.`;
+  }
+  return `你是一名专业的中文会议速记员。你会收到一场线上会议（录屏）的实时转写片段。
 请输出"滚动更新"的会议纪要，使用简体中文，Markdown 格式，严格按以下结构，每节都很短：
 
 ## 一句话概要
@@ -191,6 +219,7 @@ const SUMMARY_SYSTEM = `你是一名专业的中文会议速记员。你会收�
 - 没有就写"暂无"
 
 只输出纪要本身，不要解释，不要客套。合并重复内容，保留具体数字、日期、人名、产品名。`;
+}
 
 async function maybeSummarize(session) {
   if (session.summarizing || session.status !== 'recording') return;
@@ -201,18 +230,19 @@ async function maybeSummarize(session) {
   const freshChars = fresh.reduce((n, s) => n + s.text.length, 0);
   if (freshChars < 80) return;
 
+  const locale = uiLocale();
   session.summarizing = true;
   session.lastSummaryAt = Date.now();
   const prev = session.summary;
   try {
     const user = [
-      prev ? `【已有的会议纪要】\n${prev}\n` : '',
-      `【新增的转写内容】\n${fresh.map((s) => `[${fmtTime(s.start)}] ${s.text}`).join('\n')}`,
-      '\n请基于已有纪要 + 新增内容，输出更新后的完整会议纪要。',
+      prev ? L(`【已有的会议纪要】\n${prev}\n`, `Existing notes\n${prev}\n`, locale) : '',
+      L('【新增的转写内容】', 'New transcript', locale) + `\n${fresh.map((s) => `[${fmtTime(s.start)}] ${s.text}`).join('\n')}`,
+      L('请基于已有纪要 + 新增内容，输出更新后的完整会议纪要。', 'Update the notes using the existing notes plus the new transcript. Output the complete updated notes.', locale),
     ].filter(Boolean).join('\n');
 
     const out = await chat([
-      { role: 'system', content: SUMMARY_SYSTEM },
+      { role: 'system', content: summarySystem(locale) },
       { role: 'user', content: user },
     ], { maxTokens: 900, temperature: 0.2 });
 
@@ -220,13 +250,41 @@ async function maybeSummarize(session) {
     session.summarizedUpto = session.segments.length;
     sseSend(session, { type: 'summary', summary: session.summary, partial: true });
   } catch (err) {
-    sseSend(session, { type: 'error', message: `AI 总结失败：${err.message}` });
+    sseSend(session, { type: 'error', message: L(`AI 总结失败：${err.message}`, `AI notes failed: ${err.message}`, locale) });
   } finally {
     session.summarizing = false;
   }
 }
 
-const FINAL_SYSTEM = `你是一名资深的中文会议纪要专家。请根据一场线上会议（录屏）的完整转写，输出一份可以直接发给同事的会议纪要。
+function finalSystem(locale) {
+  if (locale === 'en') {
+    return `You are a senior meeting-notes editor. Based on the full transcript of a recorded online meeting, produce notes that can be sent to colleagues directly.
+Requirements: English, Markdown; the first line must be "# <a title of at most 12 words>"; dense with information, keeping names, numbers, dates, product names and conclusions;
+do not invent content that is not in the transcript; if a section has no information, write "Not mentioned". Structure:
+
+# Title
+> Recorded: {time} · Duration: {duration} · Source: screen recording
+
+## Overview
+3–5 sentences on what the meeting was, what was discussed and the outcome.
+
+## Key conclusions
+- 3–6 of the most important conclusions
+
+## Walkthrough (with timestamps)
+Group into 3–6 topic sections, each with a start–end timestamp, followed by 1–3 sentences.
+
+## Action items
+| Item | Owner | Due |
+|---|---|---|
+(if none, write a single row "Not mentioned")
+
+## Risks / open questions
+- If none, write "None"
+
+Note: do not repeat the transcript paragraph by paragraph and do not paste the raw transcript into the notes.`;
+  }
+  return `你是一名资深的中文会议纪要专家。请根据一场线上会议（录屏）的完整转写，输出一份可以直接发给同事的会议纪要。
 要求：简体中文，Markdown；第一行必须是 "# 一句不超过 20 字的会议标题"；信息密度高，保留所有人名、数字、日期、产品名、结论；
 不要编造转写里没有的内容；如果某部分没有信息就写"未提及"。结构如下：
 
@@ -251,11 +309,18 @@ const FINAL_SYSTEM = `你是一名资深的中文会议纪要专家。请根据�
 - 没有就写"暂无"
 
 注意：不要逐段复述转写，也不要把逐字稿原文附在纪要里。`;
+}
 
-async function finalSummary(session) {
+async function finalSummary(session, locale = uiLocale()) {
   const transcript = fullTranscript(session);
   const duration = session.durationSec || 0;
-  const head = `录制时间：${new Date(session.createdAt).toLocaleString('zh-CN')}\n时长：${fmtTime(duration)}\n\n【完整转写】\n`;
+  const when = new Date(session.createdAt).toLocaleString(locale);
+  const head = L(
+    `录制时间：${when}\n时长：${fmtTime(duration)}\n\n【完整转写】\n`,
+    `Recorded: ${when}\nDuration: ${fmtTime(duration)}\n\nFull transcript:\n`,
+    locale,
+  );
+
   // 太长的会议先分段压缩，避免超出上下文
   if (transcript.length > 60000) {
     const parts = [];
@@ -271,43 +336,73 @@ async function finalSummary(session) {
     const briefs = [];
     for (let i = 0; i < parts.length; i++) {
       const b = await chat([
-        { role: 'system', content: '你是会议速记员。把下面这段转写压缩成 400 字以内的要点，保留数字、人名、结论、待办。只输出要点。' },
+        {
+          role: 'system',
+          content: L(
+            '你是会议速记员。把下面这段转写压缩成 400 字以内的要点，保留数字、人名、结论、待办。只输出要点。',
+            'You are a meeting note-taker. Compress the transcript below into bullet points under 400 words, keeping numbers, names, conclusions and action items. Output only the bullets.',
+            locale,
+          ),
+        },
         { role: 'user', content: parts[i] },
       ], { maxTokens: 800, temperature: 0.2 });
-      briefs.push(`【第 ${i + 1} 段要点】\n${b.trim()}`);
+      briefs.push(L(`【第 ${i + 1} 段要点】\n${b.trim()}`, `Section ${i + 1} summary\n${b.trim()}`, locale));
     }
     return (await chat([
-      { role: 'system', content: FINAL_SYSTEM },
-      { role: 'user', content: `${head}（转写过长，以下为分段要点）\n\n${briefs.join('\n\n')}` },
+      { role: 'system', content: finalSystem(locale) },
+      {
+        role: 'user',
+        content: head + L('（转写过长，以下为分段要点）', '(Transcript too long; section summaries below)', locale) + `\n\n${briefs.join('\n\n')}`,
+      },
     ], { maxTokens: 2500, temperature: 0.25, timeoutMs: 180000 })).trim();
   }
+
   return (await chat([
-    { role: 'system', content: FINAL_SYSTEM.replace('{时间}', new Date(session.createdAt).toLocaleString('zh-CN')).replace('{时长}', fmtTime(duration)) },
+    {
+      role: 'system',
+      content: finalSystem(locale)
+        .replace('{time}', when)
+        .replace('{duration}', fmtTime(duration)),
+    },
     { role: 'user', content: head + transcript },
   ], { maxTokens: 2500, temperature: 0.25, timeoutMs: 180000 })).trim();
 }
 
 /** 大模型不可用时的兜底纪要：保证 summary.md 一定存在，链接不会 404。 */
-function fallbackSummary(session, reason) {
-  const first = session.segments[0]?.text || '未命名录制';
-  const title = first.replace(/[，。！？、,.!?\s]+/g, ' ').trim().slice(0, 20) || '未命名录制';
+function fallbackSummary(session, reason, locale = uiLocale()) {
+  const untitled = L('未命名录制', 'Untitled recording', locale);
+  const first = session.segments[0]?.text || untitled;
+  const title = first.replace(/[，。！？、,.!?\s]+/g, ' ').trim().slice(0, 20) || untitled;
+  const when = new Date(session.createdAt).toLocaleString(locale);
   const lines = [
     `# ${title}`,
     '',
-    `> 录制时间：${new Date(session.createdAt).toLocaleString('zh-CN')} · 时长：${fmtTime(session.durationSec)} · 来源：屏幕录制`,
+    L(
+      `> 录制时间：${when} · 时长：${fmtTime(session.durationSec)} · 来源：屏幕录制`,
+      `> Recorded: ${when} · Duration: ${fmtTime(session.durationSec)} · Source: screen recording`,
+      locale,
+    ),
     '',
   ];
   if (reason) {
-    lines.push(`> ⚠️ AI 纪要生成失败：${reason}`);
-    lines.push('> 下面是本地自动整理的要点。网络恢复后，可在结果页点「重新生成纪要」。');
+    lines.push(L(`> ⚠️ AI 纪要生成失败：${reason}`, `> ⚠️ AI notes failed: ${reason}`, locale));
+    lines.push(L(
+      '> 下面是本地自动整理的要点。网络恢复后，可在结果页点「重新生成纪要」。',
+      '> The local extract below is a fallback. Click "Regenerate notes" once the network is back.',
+      locale,
+    ));
     lines.push('');
   }
-  lines.push('## 关键内容（自动摘录）');
+  lines.push(L('## 关键内容（自动摘录）', '## Key content (auto extract)', locale));
   for (const s of session.segments) lines.push(`- **[${fmtTime(s.start)}]** ${s.text}`);
   lines.push('');
-  lines.push('## 说明');
-  lines.push(`- 共识别 ${session.segments.length} 句、${session.segments.reduce((n, x) => n + x.text.length, 0)} 字。`);
-  lines.push('- 完整逐字稿见同目录的 transcript.md。');
+  lines.push(L('## 说明', '## Notes', locale));
+  lines.push(L(
+    `- 共识别 ${session.segments.length} 句、${session.segments.reduce((n, x) => n + x.text.length, 0)} 字。`,
+    `- ${session.segments.length} segments, ${session.segments.reduce((n, x) => n + x.text.length, 0)} characters.`,
+    locale,
+  ));
+  lines.push(L('- 完整逐字稿见同目录的 transcript.md。', '- Full transcript: transcript.md in the same folder.', locale));
   return lines.join('\n');
 }
 
@@ -408,27 +503,32 @@ async function finalize(session) {
     }
 
     // 3) 逐字稿
-    const transcriptMd = buildTranscriptMd(session);
+    const locale = uiLocale();
+    const transcriptMd = buildTranscriptMd(session, locale);
     await writeFile(join(session.dir, 'transcript.md'), transcriptMd, 'utf8');
 
     // 4) 最终纪要：失败也一定写一份，保证 summary.md 不会 404
     let summary = session.summary;
     let summaryError = '';
     if (session.segments.length >= 1) {
-      sseSend(session, { type: 'status', status: 'processing', message: '正在生成完整会议纪要…' });
+      sseSend(session, { type: 'status', status: 'processing', message: L('正在生成完整会议纪要…', 'Writing the final notes…', locale) });
       try {
-        summary = await finalSummary(session);
+        summary = await finalSummary(session, locale);
       } catch (err) {
         summaryError = String(err && err.message || err);
         console.error('[summary]', session.id, summaryError);
         await logError(`summary ${session.id}: ${summaryError}`);
         sseSend(session, {
           type: 'error',
-          message: `完整纪要生成失败：${summaryError}${summary ? '（已保留实时纪要）' : '（已生成基础纪要，可稍后重新生成）'}`,
+          message: L(
+            `完整纪要生成失败：${summaryError}${summary ? '（已保留实时纪要）' : '（已生成基础纪要，可稍后重新生成）'}`,
+            `Final notes failed: ${summaryError}${summary ? ' (live notes kept)' : ' (a local fallback was written; you can retry later)'}`,
+            locale,
+          ),
         });
       }
     }
-    if (!summary) summary = fallbackSummary(session, summaryError);
+    if (!summary) summary = fallbackSummary(session, summaryError, locale);
     await writeFile(join(session.dir, 'summary.md'), summary + '\n', 'utf8');
 
     const titleMatch = summary.match(/^#\s+(.+)$/m);
@@ -475,13 +575,14 @@ async function finalize(session) {
   }
 }
 
-function buildTranscriptMd(session) {
+function buildTranscriptMd(session, locale = uiLocale()) {
+  const en = locale === 'en';
   const lines = [];
-  lines.push(`# 逐字稿 · ${session.id}`);
+  lines.push(en ? `# Transcript · ${session.id}` : `# 逐字稿 · ${session.id}`);
   lines.push('');
-  lines.push(`- 录制时间：${new Date(session.createdAt).toLocaleString('zh-CN')}`);
-  lines.push(`- 时长：${fmtTime(session.durationSec)}`);
-  lines.push(`- 识别引擎：SenseVoiceSmall（本地离线）`);
+  lines.push((en ? '- Recorded: ' : '- 录制时间：') + new Date(session.createdAt).toLocaleString(locale));
+  lines.push((en ? '- Duration: ' : '- 时长：') + fmtTime(session.durationSec));
+  lines.push(en ? '- Engine: SenseVoiceSmall (local, offline)' : '- 识别引擎：SenseVoiceSmall（本地离线）');
   lines.push('');
   lines.push('---');
   lines.push('');
@@ -523,10 +624,10 @@ async function loadSessionFromDisk(id) {
   };
 }
 
-async function regenerateSummary(id) {
+async function regenerateSummary(id, locale = uiLocale()) {
   const session = sessions.get(id) || (await loadSessionFromDisk(id));
   if (!session || !session.segments.length) return null;
-  const summary = await finalSummary(session);
+  const summary = await finalSummary(session, locale);
   await writeFile(join(session.dir, 'summary.md'), summary + '\n', 'utf8');
   const title = (summary.match(/^#\s+(.+)$/m) || [])[1]?.trim() || session.title || '';
   session.summary = summary;
@@ -582,10 +683,11 @@ async function handleApi(req, res, url) {
 
   if (parts[1] === 'config' && method === 'GET') {
     return json(res, 200, {
-      version: '1.5.0',
+      version: '1.6.0',
       llm: publicLlmStatus(),
       recordings: recordingsRoot(),
       recordingsDefault: DEFAULT_RECORDINGS,
+      locale: readConfigFile().locale || '',
     });
   }
 
@@ -611,6 +713,11 @@ async function handleApi(req, res, url) {
   if (parts[1] === 'config' && method === 'POST') {
     try {
       const body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
+
+      // 界面语言：中文 / 英文，同时决定纪要语言
+      if (body.locale === 'en' || body.locale === 'zh-CN') {
+        writeConfigFile({ ...readConfigFile(), locale: body.locale });
+      }
 
       // 保存位置：验证/创建目录，并把旧目录记下来，保证历史列表不丢
       if (typeof body.recordingsDir === 'string' && body.recordingsDir.trim()) {
@@ -763,14 +870,23 @@ async function handleApi(req, res, url) {
     const body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
     const question = String(body.question || '').trim().slice(0, 2000);
     if (!question) return json(res, 400, { error: '问题为空' });
+    const locale = body.locale === 'en' ? 'en' : 'zh-CN';
 
     const recent = session.segments.slice(-80).map((s) => `[${fmtTime(s.start)}] ${s.text}`).join('\n');
-    const sys = `你是这场线上会议的 AI 助手。下面是会议到目前为止的纪要和转写。请用简体中文回答用户的问题。
+    const sys = locale === 'en'
+      ? `You are the AI assistant for this recorded meeting. You get the notes so far and the recent transcript. Answer in English.
+Rules:
+- Ground your answer in the notes and transcript, and cite timestamps like "around 12:30".
+- If the transcript does not cover it, say "The recording so far does not mention that", then you may add a guess marked "(guess)".
+- Be concise; prefer bullets; do not restate the question.`
+      : `你是这场线上会议的 AI 助手。下面是会议到目前为止的纪要和转写。请用简体中文回答用户的问题。
 规则：
 - 优先依据纪要和转写回答；引用内容时带上时间戳，例如"在 12:30 左右"。
 - 如果转写里没有相关信息，直接说"目前录到的内容里没有提到"，可以再给出你的推测，但要标注"（推测）"。
 - 回答简洁，能用要点就用要点，不要重复问题。`;
-    const user = `【会议纪要】\n${session.summary || '（还没有生成，请依据转写回答）'}\n\n【最近转写】\n${recent || '（还没有识别到语音）'}\n\n【问题】${question}`;
+    const user = locale === 'en'
+      ? `Meeting notes\n${session.summary || '(not generated yet; answer from the transcript)'}\n\nRecent transcript\n${recent || '(no speech recognized yet)'}\n\nQuestion: ${question}`
+      : `【会议纪要】\n${session.summary || '（还没有生成，请依据转写回答）'}\n\n【最近转写】\n${recent || '（还没有识别到语音）'}\n\n【问题】${question}`;
 
     res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-cache', 'x-accel-buffering': 'no' });
     try {
@@ -781,7 +897,7 @@ async function handleApi(req, res, url) {
       session.qa.push({ q: question, a: answer, at: new Date().toISOString() });
       res.end();
     } catch (err) {
-      res.write(`\n[回答失败] ${err.message}`);
+      res.write(locale === 'en' ? `\n[Answer failed] ${err.message}` : `\n[回答失败] ${err.message}`);
       res.end();
     }
     return;
@@ -789,7 +905,9 @@ async function handleApi(req, res, url) {
 
   if (parts[1] === 'session' && parts[2] && parts[3] === 'summary' && method === 'POST') {
     try {
-      const out = await regenerateSummary(parts[2]);
+      const body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
+      const locale = body.locale === 'en' ? 'en' : body.locale === 'zh-CN' ? 'zh-CN' : undefined;
+      const out = await regenerateSummary(parts[2], locale);
       if (!out) return json(res, 400, { error: '这条录制没有逐字稿，无法生成纪要' });
       if (session) sseSend(session, { type: 'summary', summary: out.summary });
       return json(res, 200, { ok: true, ...out });

@@ -1,4 +1,5 @@
 /* 录屏助手前端：屏幕 + 系统声音采集，本地转写，AI 纪要 */
+import { t, setLocale, getLocale, applyStatic, detectLocale } from './i18n.js';
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -31,12 +32,12 @@ const state = {
   uploading: false,
   audioQueue: [],
   audioBusy: false,
-  audioChain: Promise.resolve(),
-  audioInflight: 0,
   segCount: 0,
   lastLevelAt: 0,
   ending: false,
   resultShown: false,
+  statusKey: 'idle',
+  locale: 'zh-CN',
 };
 
 // ------------------------------------------------------------------ 初始化
@@ -47,15 +48,23 @@ async function init() {
   bindUI();
   restoreOptions();
   window.__rec = state; // 方便调试/自动化
+
+  let saved = null;
+  try { saved = localStorage.getItem('rec.locale'); } catch { }
+  setLocale(saved || detectLocale());
+  state.locale = getLocale();
   if (IS_DESKTOP) applyDesktopCopy();
 
   try {
     const r = await fetch('/api/config');
     const cfg = await r.json();
+    if (!saved && cfg.locale) setLocale(cfg.locale);
+    state.locale = getLocale();
     applyLlmBadge(cfg.llm);
     state.recordingsDir = cfg.recordings;
+    refreshTexts();
   } catch {
-    $('#llmBadge').textContent = '服务未连接';
+    $('#llmBadge').textContent = t('badge.disconnected');
     $('#llmBadge').className = 'badge badge-bad';
   }
 }
@@ -64,31 +73,57 @@ function applyLlmBadge(llm) {
   const badge = $('#llmBadge');
   badge.style.cursor = 'pointer';
   if (!llm) {
-    badge.textContent = '服务未连接';
+    badge.textContent = t('badge.disconnected');
     badge.className = 'badge badge-bad';
     return;
   }
   if (llm.ready) {
-    const src = llm.source === 'dsh' ? 'DSH 密钥' : llm.source === 'config' ? '本机配置' : llm.source === 'env' ? '环境变量' : '';
-    badge.textContent = `AI 就绪 · ${llm.model}${src ? ' · ' + src : ''}`;
+    const src = llm.source && llm.source !== 'none' ? ' · ' + t('settings.source.' + llm.source) : '';
+    badge.textContent = t('badge.ready', { model: llm.model, src });
     badge.className = 'badge badge-ok';
   } else {
-    badge.textContent = 'AI 未配置密钥 · 点此设置';
+    badge.textContent = t('badge.noKey');
     badge.className = 'badge badge-bad';
+  }
+}
+
+function setStatus(key) {
+  state.statusKey = key;
+  $('#statusText').textContent = t('status.' + key);
+}
+
+function refreshTexts() {
+  applyStatic();
+  document.title = t('app.docTitle');
+
+  if (state.recording) $('#hint').textContent = t('hint.recording');
+  else if (state.ending) $('#hint').textContent = t('hint.stopping');
+  else if (state.resultShown) $('#hint').textContent = t('hint.done');
+  else $('#hint').textContent = IS_DESKTOP ? t('hint.desktop') : t('hint.idle');
+
+  setStatus(state.statusKey || 'idle');
+  $('#segCount').textContent = t('seg.count', { n: state.segCount });
+  $('#btnPause').textContent = state.paused ? t('btn.resume') : t('btn.pause');
+  if (!$('#screenFlags').hidden) {
+    $('#flagMic').textContent = state.micStream ? t('flag.mic') : t('flag.sysOnly');
+  }
+  if (IS_DESKTOP) applyDesktopCopy();
+  if (state.statusKey === 'idle' && !state.recording && !state.resultShown) {
+    $('#meterTip').textContent = '';
   }
 }
 
 function bindUI() {
   $('#btnStart').addEventListener('click', startRecording);
   $('#btnPause').addEventListener('click', togglePause);
-  $('#btnStop').addEventListener('click', () => stopRecording('手动结束'));
+  $('#btnStop').addEventListener('click', () => stopRecording('toast.stoppedByUser'));
   $('#btnHistory').addEventListener('click', showHistory);
   $('#btnSettings').addEventListener('click', openSettings);
   $('#llmBadge').addEventListener('click', openSettings);
   $('#optQuality').addEventListener('change', saveOptions);
   $('#optMic').addEventListener('change', saveOptions);
 
-  $$('.tab').forEach((t) => t.addEventListener('click', () => switchTab(t.dataset.tab)));
+  $$('.tab').forEach((tab) => tab.addEventListener('click', () => switchTab(tab.dataset.tab)));
 
   $('#askForm').addEventListener('submit', (e) => {
     e.preventDefault();
@@ -109,18 +144,18 @@ function bindUI() {
     const btn = e.target.closest('[data-regen]');
     if (!btn) return;
     btn.disabled = true;
-    btn.textContent = '生成中…';
+    btn.textContent = t('history.generating');
     try {
       const r = await fetch(`/api/session/${btn.dataset.regen}/summary`, { method: 'POST' });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
-      btn.textContent = '已生成';
-      toast('纪要已生成', 'ok');
+      btn.textContent = t('history.generated');
+      toast(t('history.genToast'), 'ok');
       setTimeout(() => showHistory(), 500);
     } catch (err) {
       btn.disabled = false;
-      btn.textContent = '生成纪要';
-      toast('生成失败：' + (err.message || err), 'err');
+      btn.textContent = t('history.generate');
+      toast(t('history.genFailed') + (err.message || err), 'err');
     }
   });
   document.addEventListener('keydown', (e) => {
@@ -179,13 +214,13 @@ async function startRecording() {
       preferCurrentTab: false,
     });
   } catch (err) {
-    toast('没有拿到屏幕共享：' + (err.message || err), 'err');
+    toast(t('toast.screenDenied') + (err.message || err), 'err');
     return;
   }
 
   const sysTracks = display.getAudioTracks();
   if (!sysTracks.length) {
-    display.getTracks().forEach((t) => t.stop());
+    display.getTracks().forEach((tr) => tr.stop());
     showNoAudioHelp();
     return;
   }
@@ -200,7 +235,7 @@ async function startRecording() {
       });
     } catch {
       state.micStream = null;
-      toast('没有拿到麦克风权限，这次只录系统声音', 'err');
+      toast(t('toast.noMic'), 'err');
     }
   } else {
     state.micStream = null;
@@ -213,7 +248,7 @@ async function startRecording() {
     state.sessionId = j.id;
   } catch (err) {
     cleanupMedia();
-    toast('无法创建录制会话：' + (err.message || err), 'err');
+    toast(t('toast.sessionFailed') + (err.message || err), 'err');
     return;
   }
 
@@ -277,10 +312,10 @@ async function startRecording() {
   rec.ondataavailable = (e) => {
     if (e.data && e.data.size > 0) enqueueChunk(e.data);
   };
-  rec.onerror = (e) => toast('录制器出错：' + (e.error?.message || e), 'err');
+  rec.onerror = (e) => toast(t('toast.recorderError') + (e.error?.message || e), 'err');
 
   display.getVideoTracks()[0].addEventListener('ended', () => {
-    if (state.recording) stopRecording('屏幕共享已停止');
+    if (state.recording) stopRecording('toast.stoppedByShare');
   });
 
   state.recorder = rec;
@@ -301,18 +336,19 @@ async function startRecording() {
   $('#recBadge').hidden = false;
   $('#screenFlags').hidden = false;
   $('#flagSys').className = 'flag on';
+  $('#flagSys').textContent = t('flag.system');
   $('#flagMic').className = 'flag ' + (state.micStream ? 'on' : 'off');
-  $('#flagMic').textContent = state.micStream ? '麦克风' : '仅系统声音';
+  $('#flagMic').textContent = state.micStream ? t('flag.mic') : t('flag.sysOnly');
   $('#btnStart').disabled = true;
   $('#btnPause').disabled = false;
   $('#btnStop').disabled = false;
   $('#optQuality').disabled = true;
   $('#optMic').disabled = true;
-  $('#hint').textContent = '正在录制：本页面请保持打开。可以在右侧「提问」里随时问 AI。';
-  $('#statusText').textContent = '正在录制';
+  $('#hint').textContent = t('hint.recording');
+  setStatus('recording');
   startTimer();
   watchSilence();
-  toast('开始录制，正在加载本地语音识别模型…', 'ok');
+  toast(t('toast.started'), 'ok');
 }
 
 function pickMime() {
@@ -351,28 +387,28 @@ function togglePause() {
     try { rec.pause(); } catch { }
     state.paused = true;
     state.pausedAt = Date.now();
-    $('#btnPause').textContent = '继续';
+    $('#btnPause').textContent = t('btn.resume');
     $('#pauseVeil').hidden = false;
-    $('#statusText').textContent = '已暂停';
+    setStatus('paused');
   } else {
     try { rec.resume(); } catch { }
     state.pausedTotal += Date.now() - state.pausedAt;
     state.paused = false;
-    $('#btnPause').textContent = '暂停';
+    $('#btnPause').textContent = t('btn.pause');
     $('#pauseVeil').hidden = true;
-    $('#statusText').textContent = '正在录制';
+    setStatus('recording');
   }
 }
 
-async function stopRecording(reason) {
+async function stopRecording(reasonKey) {
   if (!state.recording || state.ending) return;
   state.ending = true;
   state.recording = false;
   clearInterval(state.timerId);
   $('#btnStop').disabled = true;
   $('#btnPause').disabled = true;
-  $('#statusText').textContent = '正在保存…';
-  if (reason) toast(reason, 'ok');
+  setStatus('saving');
+  if (reasonKey) toast(t(reasonKey), 'ok');
 
   const durationSec = activeSeconds();
 
@@ -399,10 +435,10 @@ async function stopRecording(reason) {
     await fetch(`/api/session/${state.sessionId}/finish`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ durationSec, reason }),
+      body: JSON.stringify({ durationSec, reason: reasonKey }),
     });
   } catch (err) {
-    toast('提交收尾失败：' + (err.message || err), 'err');
+    toast(t('toast.saveFailed') + (err.message || err), 'err');
   }
 
   showProcessing();
@@ -418,12 +454,12 @@ async function stopRecording(reason) {
   $('#btnStop').disabled = true;
   $('#optQuality').disabled = false;
   $('#optMic').disabled = false;
-  $('#hint').textContent = '已停止录制，正在合并录像并生成最终纪要，请稍候…';
+  $('#hint').textContent = t('hint.stopping');
 }
 
 function cleanupMedia() {
-  try { state.displayStream?.getTracks().forEach((t) => t.stop()); } catch { }
-  try { state.micStream?.getTracks().forEach((t) => t.stop()); } catch { }
+  try { state.displayStream?.getTracks().forEach((tr) => tr.stop()); } catch { }
+  try { state.micStream?.getTracks().forEach((tr) => tr.stop()); } catch { }
   try { state.ctx?.close(); } catch { }
   state.ctx = null;
   state.tap = null;
@@ -469,7 +505,7 @@ async function flushUploads() {
   while ((state.chunkQueue.length || state.uploading) && Date.now() < deadline) {
     await sleep(200);
   }
-  if (state.uploading || state.chunkQueue.length) toast('还有分片没传完，文件可能不完整', 'err');
+  if (state.uploading || state.chunkQueue.length) toast(t('toast.uploadIncomplete'), 'err');
 }
 
 function sendPcm(pcm) {
@@ -514,12 +550,12 @@ function updateLevel(rms) {
 }
 
 function watchSilence() {
-  const t = setInterval(() => {
-    if (!state.recording) { clearInterval(t); return; }
+  const timer = setInterval(() => {
+    if (!state.recording) { clearInterval(timer); return; }
     if (state.paused) return;
     if (Date.now() - state.lastLevelAt > 9000) {
-      $('#meterTip').textContent = '没检测到声音：确认勾选了「系统音频」，并检查会议软件是否静音';
-      if (Date.now() - state.lastLevelAt > 15000) state.lastLevelAt = Date.now(); // 别一直刷
+      $('#meterTip').textContent = IS_DESKTOP ? t('meter.silenceDesktop') : t('meter.silence');
+      if (Date.now() - state.lastLevelAt > 15000) state.lastLevelAt = Date.now();
     }
   }, 2000);
 }
@@ -536,7 +572,7 @@ function openEvents() {
     handleEvent(d);
   };
   es.onerror = () => {
-    if (state.recording) $('#statusText').textContent = '连接中断，正在重连…';
+    if (state.recording) setStatus('reconnecting');
   };
 }
 
@@ -546,7 +582,7 @@ function handleEvent(d) {
       clearTranscript();
       d.segments.forEach((s) => appendSegment(s, false));
       state.segCount = d.segments.length;
-      $('#segCount').textContent = `${state.segCount} 句`;
+      $('#segCount').textContent = t('seg.count', { n: state.segCount });
     }
     if (d.summary) renderSummary(d.summary);
     if (d.status === 'done' && d.result) showResult(d.result, d.summary);
@@ -555,21 +591,21 @@ function handleEvent(d) {
   if (d.type === 'segment') {
     appendSegment(d, true);
     state.segCount++;
-    $('#segCount').textContent = `${state.segCount} 句`;
-    $('#statusText').textContent = state.paused ? '已暂停' : '正在录制';
+    $('#segCount').textContent = t('seg.count', { n: state.segCount });
+    setStatus(state.paused ? 'paused' : 'recording');
     return;
   }
   if (d.type === 'summary') {
     renderSummary(d.summary);
-    if (d.partial) $('#statusText').textContent = '纪要已更新';
+    if (d.partial) setStatus('updated');
     return;
   }
   if (d.type === 'status') {
     if (d.status === 'processing') {
-      $('#statusText').textContent = d.message || '正在生成纪要…';
-      showProcessing(d.message);
+      setStatus('processing');
+      showProcessing();
     }
-    if (d.status === 'error') $('#statusText').textContent = '收尾出错';
+    if (d.status === 'error') setStatus('error');
     return;
   }
   if (d.type === 'done') {
@@ -591,7 +627,7 @@ function appendSegment(s, isNew) {
   const ts = document.createElement('button');
   ts.className = 'ts';
   ts.textContent = fmt(s.start);
-  ts.title = '点击定位到视频这个时间点';
+  ts.title = t('seg.seekTitle');
   ts.addEventListener('click', () => seekVideo(s.start));
   const p = document.createElement('p');
   p.textContent = s.text;
@@ -620,7 +656,7 @@ function seekVideo(sec) {
 
 async function ask(question) {
   if (!state.sessionId) {
-    toast('先开始录制，AI 才有内容可回答', 'err');
+    toast(t('ask.noSession'), 'err');
     return;
   }
   const chat = $('#chat');
@@ -642,7 +678,7 @@ async function ask(question) {
     const res = await fetch(`/api/session/${state.sessionId}/ask`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, locale: getLocale() }),
     });
     if (!res.ok) throw new Error(await res.text());
     const reader = res.body.getReader();
@@ -655,7 +691,7 @@ async function ask(question) {
     }
   } catch (err) {
     bot.classList.add('err');
-    bot.textContent = '回答失败：' + (err.message || err);
+    bot.textContent = t('ask.failed') + (err.message || err);
   } finally {
     bot.classList.remove('streaming');
     $('#btnAsk').disabled = false;
@@ -666,7 +702,7 @@ async function ask(question) {
 // ------------------------------------------------------------------ 面板/弹窗
 
 function switchTab(name) {
-  $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
+  $$('.tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.tab === name));
   ['transcript', 'summary', 'ask'].forEach((n) => {
     $(`#tab-${n}`).hidden = n !== name;
   });
@@ -675,19 +711,19 @@ function switchTab(name) {
 
 function resetPanels() {
   clearTranscript();
-  $('#transcript').innerHTML = '<div class="empty">正在启动本地语音识别…第一句话识别出来后就会出现在这里。</div>';
-  $('#summary').innerHTML = '<div class="empty">AI 会边录边整理纪要，大约每 30 秒刷新一次。</div>';
-  $('#chat').innerHTML = '<div class="empty">录屏过程中可以随时提问，例如「刚才说的预算是多少？」「总结一下前十分钟」。</div>';
-  $('#segCount').textContent = '0 句';
+  $('#transcript').innerHTML = `<div class="empty">${t('empty.transcriptLoading')}</div>`;
+  $('#summary').innerHTML = `<div class="empty">${t('empty.summary')}</div>`;
+  $('#chat').innerHTML = `<div class="empty">${t('empty.ask')}</div>`;
   state.segCount = 0;
+  $('#segCount').textContent = t('seg.count', { n: 0 });
   switchTab('transcript');
 }
 
-function showProcessing(message = '正在合并录像并生成会议纪要…') {
+function showProcessing() {
   const card = $('#modalCard');
-  card.innerHTML = `<h2>正在收尾</h2><div class="modal-sub">录像分片已经保存在本机，正在合并并让 AI 写最终纪要。</div>
-    <div class="processing"><div class="spinner"></div><span id="procMsg">${esc(message)}</span></div>
-    <p class="hint">首次生成长纪要通常需要 20~60 秒，请不要关闭本页面。</p>`;
+  card.innerHTML = `<h2>${t('processing.title')}</h2><div class="modal-sub">${t('processing.desc')}</div>
+    <div class="processing"><div class="spinner"></div><span id="procMsg">${t('status.processing')}</span></div>
+    <p class="hint">${t('processing.hint')}</p>`;
   openModal();
 }
 
@@ -696,18 +732,23 @@ function showResult(result, summary) {
   state.resultShown = true;
   closeModal();
   const card = $('#modalCard');
+  const sub = t('result.sub', {
+    dur: fmt(result.durationSec),
+    n: result.segments,
+    dir: result.folder || '',
+  });
   card.innerHTML = `
-    <h2>${esc(result.title || '录制完成')}</h2>
-    <div class="modal-sub">时长 ${fmt(result.durationSec)} · 识别 ${result.segments} 句 · 文件在 ${esc(result.folder || '')}</div>
-    ${result.summaryAi === false ? `<div class="warn-box">⚠️ 这次 AI 纪要没生成成功：${esc(result.summaryError || '未知原因')}<br />下面先用本地自动摘录顶上，可以点「重新生成纪要」再试一次。</div>` : ''}
-    ${result.video ? `<video controls src="${result.video}"${result.poster ? ` poster="${result.poster}"` : ''}></video>` : '<p class="hint">没有拿到视频数据（可能录制时间太短）。</p>'}
+    <h2>${esc(result.title || t('result.done'))}</h2>
+    <div class="modal-sub">${esc(sub)}</div>
+    ${result.summaryAi === false ? `<div class="warn-box">${t('result.warn', { err: esc(result.summaryError || '') })}</div>` : ''}
+    ${result.video ? `<video controls src="${result.video}"${result.poster ? ` poster="${result.poster}"` : ''}></video>` : `<p class="hint">${t('result.noVideo')}</p>`}
     <div class="modal-actions">
-      ${result.video ? `<a href="${result.video}" download>下载录像</a>` : ''}
-      <a href="${result.transcript}" target="_blank">逐字稿 .md</a>
-      <a href="${result.summary}" target="_blank">会议纪要 .md</a>
-      <button id="btnRegen" class="ghost">重新生成纪要</button>
-      <button id="btnOpenFolder" class="ghost">打开文件夹</button>
-      <button id="btnCloseModal" class="ghost">关闭</button>
+      ${result.video ? `<a href="${result.video}" download>${t('result.download')}</a>` : ''}
+      <a href="${result.transcript}" target="_blank">${t('result.transcript')}</a>
+      <a href="${result.summary}" target="_blank">${t('result.summary')}</a>
+      <button id="btnRegen" class="ghost">${t('result.regen')}</button>
+      <button id="btnOpenFolder" class="ghost">${t('result.openFolder')}</button>
+      <button id="btnCloseModal" class="ghost">${t('result.close')}</button>
     </div>
     <div class="markdown" id="resultSummary">${renderMarkdown(summary || '')}</div>`;
   openModal();
@@ -718,24 +759,28 @@ function showResult(result, summary) {
   $('#btnRegen')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true;
-    btn.textContent = '生成中…';
+    btn.textContent = t('result.regening');
     try {
-      const r = await fetch(`/api/session/${result.id}/summary`, { method: 'POST' });
+      const r = await fetch(`/api/session/${result.id}/summary`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ locale: getLocale() }),
+      });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
       $('#resultSummary').innerHTML = renderMarkdown(j.summary);
       if (j.title) card.querySelector('h2').textContent = j.title;
       card.querySelector('.warn-box')?.remove();
-      btn.textContent = '已重新生成';
-      toast('纪要已重新生成', 'ok');
+      btn.textContent = t('result.regenDone');
+      toast(t('result.regenToast'), 'ok');
     } catch (err) {
       btn.disabled = false;
-      btn.textContent = '重新生成纪要';
-      toast('重新生成失败：' + (err.message || err), 'err');
+      btn.textContent = t('result.regen');
+      toast(t('result.regenFailed') + (err.message || err), 'err');
     }
   });
-  $('#statusText').textContent = '已完成';
-  $('#hint').textContent = '录制完成。录像、逐字稿、会议纪要都在上面的文件夹里。';
+  setStatus('done');
+  $('#hint').textContent = t('hint.done');
 }
 
 function applyDesktopCopy() {
@@ -744,46 +789,46 @@ function applyDesktopCopy() {
   if (ph) {
     const h = ph.querySelector('h2');
     const p = ph.querySelector('p');
-    if (h) h.textContent = '一键录制屏幕和电脑里的声音';
-    if (p) p.innerHTML = '桌面版会自动录制<b>整个屏幕</b>和<b>系统声音</b>：不用选窗口，也不用勾选音频。<br />点下面的「开始录制」就可以了。';
+    if (h) h.textContent = t('placeholder.titleDesktop');
+    if (p) p.innerHTML = t('placeholder.descDesktop');
     ph.querySelector('.ph-steps')?.remove();
   }
-  $('#hint').textContent = '桌面版：点开始就直接录，保持这个窗口打开即可。戴耳机可以避免回声。';
+  $('#hint').textContent = t('hint.desktop');
 }
 
 function showNoAudioHelp() {
   const card = $('#modalCard');
   if (IS_DESKTOP) {
     card.innerHTML = `
-      <h2>这次没有拿到「系统声音」</h2>
-      <div class="modal-sub">桌面版会请求系统环回音频（WASAPI loopback），但这次返回的是空音轨。</div>
+      <h2>${t('noaudio.title')}</h2>
+      <div class="modal-sub">${t('noaudio.descDesktop')}</div>
       <div class="markdown">
-        <p>可以这样排查：</p>
+        <p>${t('noaudio.descTitle')}</p>
         <ul>
-          <li>确认电脑正在出声（会议/视频没有静音，音量不为 0）。</li>
-          <li>确认默认输出设备是现在在用的扬声器或耳机，蓝牙耳机没连上时容易出问题。</li>
-          <li>点「重新录制」再试一次；还不行就关掉软件重开。</li>
+          <li>${t('noaudio.dstep1')}</li>
+          <li>${t('noaudio.dstep2')}</li>
+          <li>${t('noaudio.dstep3')}</li>
         </ul>
       </div>
-      <div class="modal-actions"><button id="btnRetryShare" class="primary">重新录制</button><button id="btnCancelShare" class="ghost">取消</button></div>`;
+      <div class="modal-actions"><button id="btnRetryShare" class="primary">${t('noaudio.retryDesktop')}</button><button id="btnCancelShare" class="ghost">${t('noaudio.cancel')}</button></div>`;
     openModal();
     $('#btnRetryShare').addEventListener('click', () => { closeModal(); startRecording(); });
     $('#btnCancelShare').addEventListener('click', closeModal);
     return;
   }
   card.innerHTML = `
-    <h2>这次没有抓到「系统声音」</h2>
-    <div class="modal-sub">你刚才选择的分享方式里不含音频，录出来会没有声音。</div>
+    <h2>${t('noaudio.title')}</h2>
+    <div class="modal-sub">${t('noaudio.descBrowser')}</div>
     <div class="markdown">
-      <p>请按下面步骤重来一次：</p>
+      <p>${t('noaudio.howTitle')}</p>
       <ul>
-        <li>点「重新选择」后，在弹窗顶部选择 <b>整个屏幕</b>（不要选「窗口」或「标签页」）。</li>
-        <li>在弹窗左下角，把 <b>「同时分享系统音频」</b> 勾上（Chrome/Edge 里叫「分享系统音频」）。</li>
-        <li>再点「分享」。</li>
+        <li>${t('noaudio.step1')}</li>
+        <li>${t('noaudio.step2')}</li>
+        <li>${t('noaudio.step3')}</li>
       </ul>
-      <p>如果根本看不到这个勾选项：说明你选的是单个窗口或标签页，换成「整个屏幕」就会出现。</p>
+      <p>${t('noaudio.tip')}</p>
     </div>
-    <div class="modal-actions"><button id="btnRetryShare" class="primary">重新选择</button><button id="btnCancelShare" class="ghost">取消</button></div>`;
+    <div class="modal-actions"><button id="btnRetryShare" class="primary">${t('noaudio.retry')}</button><button id="btnCancelShare" class="ghost">${t('noaudio.cancel')}</button></div>`;
   openModal();
   $('#btnRetryShare').addEventListener('click', () => { closeModal(); startRecording(); });
   $('#btnCancelShare').addEventListener('click', closeModal);
@@ -791,30 +836,30 @@ function showNoAudioHelp() {
 
 async function showHistory() {
   const card = $('#modalCard');
-  card.innerHTML = '<h2>历史录制</h2><div class="modal-sub">全部保存在本机 recordings 目录。</div><div class="processing"><div class="spinner"></div><span>读取中…</span></div>';
+  card.innerHTML = `<h2>${t('history.title')}</h2><div class="modal-sub">${t('history.subtitleAll')}</div><div class="processing"><div class="spinner"></div><span>${t('history.loading')}</span></div>`;
   openModal();
   try {
     const r = await fetch('/api/sessions');
     const { sessions } = await r.json();
     if (!sessions.length) {
-      card.innerHTML = '<h2>历史录制</h2><div class="modal-sub">还没有录制过。</div><div class="modal-actions"><button class="ghost" id="btnCloseModal">关闭</button></div>';
+      card.innerHTML = `<h2>${t('history.title')}</h2><div class="modal-sub">${t('history.empty')}</div><div class="modal-actions"><button class="ghost" id="btnCloseModal">${t('history.close')}</button></div>`;
       $('#btnCloseModal').addEventListener('click', closeModal);
       return;
     }
     const rows = sessions.map((s) => `
       <div class="session-item">
-        <div class="meta"><b>${esc(s.title || s.id)}</b><span>${s.createdAt ? new Date(s.createdAt).toLocaleString('zh-CN') : ''} ${s.durationSec ? '· ' + fmt(s.durationSec) : ''} ${s.segments ? '· ' + s.segments + ' 句' : ''}</span></div>
-        ${s.video ? `<a href="${s.video}" target="_blank">播放</a>` : ''}
-        ${s.summary ? `<a href="${s.summary}" target="_blank">纪要</a>` : `<button data-regen="${s.id}">生成纪要</button>`}
-        ${s.transcript ? `<a href="${s.transcript}" target="_blank">逐字稿</a>` : ''}
-        ${s.unfinished ? '<span class="badge badge-bad">未正常结束</span>' : ''}
+        <div class="meta"><b>${esc(s.title || s.id)}</b><span>${s.createdAt ? new Date(s.createdAt).toLocaleString(getLocale()) : ''} ${s.durationSec ? '· ' + fmt(s.durationSec) : ''} ${s.segments ? '· ' + t('seg.count', { n: s.segments }) : ''}</span></div>
+        ${s.video ? `<a href="${s.video}" target="_blank">${t('history.play')}</a>` : ''}
+        ${s.summary ? `<a href="${s.summary}" target="_blank">${t('history.summary')}</a>` : `<button data-regen="${s.id}">${t('history.generate')}</button>`}
+        ${s.transcript ? `<a href="${s.transcript}" target="_blank">${t('history.transcript')}</a>` : ''}
+        ${s.unfinished ? `<span class="badge badge-bad">${t('history.unfinished')}</span>` : ''}
       </div>`).join('');
-    card.innerHTML = `<h2>历史录制</h2><div class="modal-sub">共 ${sessions.length} 条，全部保存在本机。</div>
+    card.innerHTML = `<h2>${t('history.title')}</h2><div class="modal-sub">${t('history.subtitleCount', { n: sessions.length })}</div>
       <div class="session-list">${rows}</div>
-      <div class="modal-actions"><button class="ghost" id="btnCloseModal">关闭</button></div>`;
+      <div class="modal-actions"><button class="ghost" id="btnCloseModal">${t('history.close')}</button></div>`;
     $('#btnCloseModal').addEventListener('click', closeModal);
   } catch (err) {
-    card.innerHTML = `<h2>历史录制</h2><div class="modal-sub">读取失败：${esc(err.message || String(err))}</div>`;
+    card.innerHTML = `<h2>${t('history.title')}</h2><div class="modal-sub">${t('history.readFailed')}${esc(err.message || String(err))}</div>`;
   }
 }
 
@@ -822,51 +867,78 @@ async function openSettings() {
   let cfg = {};
   try { cfg = await (await fetch('/api/config')).json(); } catch { }
   const llm = cfg.llm || {};
-  const sourceText = { dsh: 'DeepSeek Harness 凭据', config: '本机配置文件', env: '环境变量', none: '还没配置' }[llm.source] || '未知';
+  const locale = getLocale();
+  const sourceText = t('settings.source.' + (llm.source || 'none'));
   const card = $('#modalCard');
   card.innerHTML = `
-    <h2>设置</h2>
-    <div class="modal-sub">保存位置只影响之后的新录制；AI 设置只影响「AI 纪要 / 提问」，录屏和本地转写不需要密钥。</div>
+    <h2>${t('settings.title')}</h2>
+    <div class="modal-sub">${t('settings.subtitle')}</div>
     <div class="form">
-      <label>录屏保存位置 <span class="dim">只影响之后的新录制</span></label>
-      <div class="dir-row">
-        <input id="setDir" value="${esc(cfg.recordings || '')}" spellcheck="false" />
-        ${window.desktop && window.desktop.pickFolder ? '<button type="button" id="btnPickDir" class="ghost">选择…</button>' : ''}
-      </div>
-      <p class="hint">默认：${esc(cfg.recordingsDefault || '')}<br />改位置不会移动已有录像，历史列表仍然能看到它们。</p>
+      <label>${t('settings.language')}</label>
+      <select id="setLocale">
+        <option value="zh-CN"${locale === 'zh-CN' ? ' selected' : ''}>简体中文</option>
+        <option value="en"${locale === 'en' ? ' selected' : ''}>English</option>
+      </select>
     </div>
     <hr class="sep" />
     <div class="form">
-      <label>API Key <span class="dim">当前来源：${esc(sourceText)}${llm.keyHint ? ' · ' + esc(llm.keyHint) : ''}</span></label>
-      <input id="setKey" type="password" autocomplete="off" placeholder="留空表示不修改；填 sk-... 会保存到本机" />
-      <label>接口地址 <span class="dim">兼容 OpenAI 协议即可，也可以填本地 Ollama，例如 http://127.0.0.1:11434/v1</span></label>
+      <label>${t('settings.dirLabel')} <span class="dim">${t('settings.dirNote')}</span></label>
+      <div class="dir-row">
+        <input id="setDir" value="${esc(cfg.recordings || '')}" spellcheck="false" />
+        ${window.desktop && window.desktop.pickFolder ? `<button type="button" id="btnPickDir" class="ghost">${t('settings.choose')}</button>` : ''}
+      </div>
+      <p class="hint">${t('settings.dirDefault', { path: esc(cfg.recordingsDefault || '') })}<br />${t('settings.dirHint')}</p>
+    </div>
+    <hr class="sep" />
+    <div class="form">
+      <label>${t('settings.apiKey')} <span class="dim">${t('settings.keySource', { src: esc(sourceText), hint: llm.keyHint ? ' · ' + esc(llm.keyHint) : '' })}</span></label>
+      <input id="setKey" type="password" autocomplete="off" placeholder="${esc(t('settings.keyPlaceholder'))}" />
+      <label>${t('settings.baseUrl')} <span class="dim">${t('settings.baseUrlHint')}</span></label>
       <input id="setBase" value="${esc(llm.baseUrl || 'https://api.deepseek.com')}" />
-      <label>模型名</label>
+      <label>${t('settings.model')}</label>
       <input id="setModel" value="${esc(llm.model || 'deepseek-chat')}" />
     </div>
-    <p class="hint">保存位置：${esc(llm.configFile || '')}</p>
+    <p class="hint">${t('settings.configPath', { path: esc(llm.configFile || '') })}</p>
     <div id="testResult" class="test-result"></div>
     <div class="modal-actions">
-      <button id="btnTestLlm" class="ghost">测试连接</button>
-      <button id="btnSaveSettings" class="primary">保存</button>
-      ${llm.source === 'dsh' ? '<button id="btnImportDsh" class="ghost">从 DSH 导入密钥</button>' : ''}
-      <button id="btnCloseModal" class="ghost">关闭</button>
+      <button id="btnTestLlm" class="ghost">${t('settings.test')}</button>
+      <button id="btnSaveSettings" class="primary">${t('settings.save')}</button>
+      ${llm.source === 'dsh' ? `<button id="btnImportDsh" class="ghost">${t('settings.importDsh')}</button>` : ''}
+      <button id="btnCloseModal" class="ghost">${t('settings.close')}</button>
     </div>`;
   openModal();
+
   $('#btnCloseModal').addEventListener('click', closeModal);
+
+  $('#setLocale').addEventListener('change', async (e) => {
+    const next = e.currentTarget.value;
+    setLocale(next);
+    state.locale = next;
+    refreshTexts();
+    try {
+      await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ locale: next }),
+      });
+    } catch { }
+    openSettings();
+  });
+
   $('#btnPickDir')?.addEventListener('click', async () => {
     try {
       const dir = await window.desktop.pickFolder();
       if (dir) $('#setDir').value = dir;
     } catch (err) {
-      toast('选择文件夹失败：' + (err.message || err), 'err');
+      toast(t('toast.pickFailed') + (err.message || err), 'err');
     }
   });
+
   $('#btnTestLlm')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     const out = $('#testResult');
     btn.disabled = true;
-    btn.textContent = '测试中…';
+    btn.textContent = t('settings.testing');
     out.textContent = '';
     out.className = 'test-result';
     try {
@@ -881,37 +953,39 @@ async function openSettings() {
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
-      out.textContent = `连接成功 · 模型 ${j.model}`;
+      out.textContent = t('settings.testOk', { model: j.model });
       out.className = 'test-result ok';
     } catch (err) {
-      out.textContent = '连接失败：' + (err.message || err);
+      out.textContent = t('settings.testFail') + (err.message || err);
       out.className = 'test-result err';
     } finally {
       btn.disabled = false;
-      btn.textContent = '测试连接';
+      btn.textContent = t('settings.test');
     }
   });
+
   $('#btnImportDsh')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true;
-    btn.textContent = '导入中…';
+    btn.textContent = t('settings.importing');
     try {
       const r = await fetch('/api/config/import-dsh', { method: 'POST' });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
       applyLlmBadge(j.llm);
-      toast('已复制到本机配置，卸载 DSH 也不影响 AI 了', 'ok');
+      toast(t('toast.importOk'), 'ok');
       closeModal();
     } catch (err) {
       btn.disabled = false;
-      btn.textContent = '从 DSH 导入密钥';
-      toast('导入失败：' + (err.message || err), 'err');
+      btn.textContent = t('settings.importDsh');
+      toast(t('toast.importFailed') + (err.message || err), 'err');
     }
   });
+
   $('#btnSaveSettings').addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true;
-    btn.textContent = '保存中…';
+    btn.textContent = t('settings.saving');
     try {
       const r = await fetch('/api/config', {
         method: 'POST',
@@ -921,21 +995,19 @@ async function openSettings() {
           baseUrl: $('#setBase').value,
           model: $('#setModel').value,
           recordingsDir: $('#setDir') ? $('#setDir').value : undefined,
+          locale: getLocale(),
         }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
       applyLlmBadge(j.llm);
       if (j.recordings) state.recordingsDir = j.recordings;
-      toast(
-        j.llm.ready ? '已保存：新录制会存到上面的位置' : '已保存，但还没有 AI 密钥',
-        j.llm.ready ? 'ok' : 'err',
-      );
+      toast(j.llm.ready ? t('toast.settingsSaved') : t('toast.settingsSavedNoKey'), j.llm.ready ? 'ok' : 'err');
       closeModal();
     } catch (err) {
       btn.disabled = false;
-      btn.textContent = '保存';
-      toast('保存失败：' + (err.message || err), 'err');
+      btn.textContent = t('settings.save');
+      toast(t('settings.saveFail') + (err.message || err), 'err');
     }
   });
 }
