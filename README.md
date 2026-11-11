@@ -17,6 +17,7 @@ Records your screen together with whatever your PC is playing — online meeting
 - **Local real-time transcription**: SenseVoiceSmall + Silero VAD, CPU only, offline, sentence segmentation with timestamps
 - **Live AI notes**: refreshed every ~30 s (overview / key points / decisions / action items / open questions)
 - **Ask anytime**: answers are grounded in the transcript and cite timestamps
+- **Cancel anytime**: discard a recording, or stop and save the video + transcript without running AI notes
 - **Complete output**: `recording.mp4` (H.264/AAC, seekable) + `transcript.md` + `summary.md` + poster
 - **History**: built-in list; regenerate notes for any recording
 - **Two shapes**: Electron desktop app, or a local web UI

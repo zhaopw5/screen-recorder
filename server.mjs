@@ -476,7 +476,7 @@ async function makePoster(videoPath) {
   return null;
 }
 
-async function finalize(session) {
+async function finalize(session, { skipSummary = false } = {}) {
   if (session.finalizing) return;
   session.finalizing = true;
   session.status = 'processing';
@@ -507,10 +507,10 @@ async function finalize(session) {
     const transcriptMd = buildTranscriptMd(session, locale);
     await writeFile(join(session.dir, 'transcript.md'), transcriptMd, 'utf8');
 
-    // 4) 最终纪要：失败也一定写一份，保证 summary.md 不会 404
+    // 4) 最终纪要（skipSummary：只保存录像+逐字稿，不调用 AI）
     let summary = session.summary;
     let summaryError = '';
-    if (session.segments.length >= 1) {
+    if (!skipSummary && session.segments.length >= 1) {
       sseSend(session, { type: 'status', status: 'processing', message: L('正在生成完整会议纪要…', 'Writing the final notes…', locale) });
       try {
         summary = await finalSummary(session, locale);
@@ -528,8 +528,8 @@ async function finalize(session) {
         });
       }
     }
-    if (!summary) summary = fallbackSummary(session, summaryError, locale);
-    await writeFile(join(session.dir, 'summary.md'), summary + '\n', 'utf8');
+    if (!skipSummary && !summary) summary = fallbackSummary(session, summaryError, locale);
+    if (summary) await writeFile(join(session.dir, 'summary.md'), summary + '\n', 'utf8');
 
     const titleMatch = summary.match(/^#\s+(.+)$/m);
     if (titleMatch) session.title = titleMatch[1].trim();
@@ -543,8 +543,9 @@ async function finalize(session) {
       chars: session.segments.reduce((n, s) => n + s.text.length, 0),
       video: video ? video.split(/[\\/]/).pop() : null,
       poster: poster ? poster.split(/[\\/]/).pop() : null,
-      summary,
+      summary: summary || '',
       summaryError,
+      skippedSummary: Boolean(skipSummary),
       transcript: transcriptMd,
     };
     await writeFile(join(session.dir, 'meta.json'), JSON.stringify(meta, null, 2), 'utf8');
@@ -557,11 +558,12 @@ async function finalize(session) {
       video: video ? `/api/session/${session.id}/file/${encodeURIComponent(video.split(/[\\/]/).pop())}` : null,
       poster: poster ? `/api/session/${session.id}/file/${encodeURIComponent(poster.split(/[\\/]/).pop())}` : null,
       transcript: `/api/session/${session.id}/file/transcript.md`,
-      summary: `/api/session/${session.id}/file/summary.md`,
+      summary: summary ? `/api/session/${session.id}/file/summary.md` : null,
       folder: session.dir,
       segments: session.segments.length,
-      summaryAi: !summaryError,
+      summaryAi: !skipSummary && !summaryError,
       summaryError,
+      skippedSummary: Boolean(skipSummary),
     };
     sseSend(session, { type: 'done', result: session.result, summary });
     console.log(`[done] ${session.id} ${session.title || ''} (${fmtTime(session.durationSec)})`);
@@ -838,8 +840,20 @@ async function handleApi(req, res, url) {
     if (!session) return json(res, 404, { error: '会话不存在' });
     const body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
     if (typeof body.durationSec === 'number') session.durationSec = body.durationSec;
-    finalize(session);
+    finalize(session, { skipSummary: Boolean(body.skipSummary) });
     return json(res, 202, { ok: true });
+  }
+
+  if (parts[1] === 'session' && parts[2] && parts[3] === 'abort' && method === 'POST') {
+    if (!session) return json(res, 200, { ok: true });
+    session.aborted = true;
+    try { session.asr?.kill(); } catch { }
+    for (const client of session.clients) { try { client.end(); } catch { } }
+    session.clients.clear();
+    sessions.delete(session.id);
+    try { await rm(session.dir, { recursive: true, force: true }); } catch { }
+    console.log(`[abort] ${session.id} 已丢弃`);
+    return json(res, 200, { ok: true });
   }
 
   if (parts[1] === 'session' && parts[2] && parts[3] === 'events' && method === 'GET') {

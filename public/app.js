@@ -35,6 +35,7 @@ const state = {
   segCount: 0,
   lastLevelAt: 0,
   ending: false,
+  cancelling: false,
   resultShown: false,
   statusKey: 'idle',
   locale: 'zh-CN',
@@ -117,6 +118,7 @@ function bindUI() {
   $('#btnStart').addEventListener('click', startRecording);
   $('#btnPause').addEventListener('click', togglePause);
   $('#btnStop').addEventListener('click', () => stopRecording('toast.stoppedByUser'));
+  $('#btnCancel').addEventListener('click', showCancelDialog);
   $('#btnHistory').addEventListener('click', showHistory);
   $('#btnSettings').addEventListener('click', openSettings);
   $('#llmBadge').addEventListener('click', openSettings);
@@ -324,6 +326,7 @@ async function startRecording() {
   state.recording = true;
   state.paused = false;
   state.ending = false;
+  state.cancelling = false;
   state.startedAt = Date.now();
   state.pausedTotal = 0;
   state.segCount = 0;
@@ -342,6 +345,7 @@ async function startRecording() {
   $('#btnStart').disabled = true;
   $('#btnPause').disabled = false;
   $('#btnStop').disabled = false;
+  $('#btnCancel').disabled = false;
   $('#optQuality').disabled = true;
   $('#optMic').disabled = true;
   $('#hint').textContent = t('hint.recording');
@@ -400,13 +404,14 @@ function togglePause() {
   }
 }
 
-async function stopRecording(reasonKey) {
+async function stopRecording(reasonKey, opts = {}) {
   if (!state.recording || state.ending) return;
   state.ending = true;
   state.recording = false;
   clearInterval(state.timerId);
   $('#btnStop').disabled = true;
   $('#btnPause').disabled = true;
+  $('#btnCancel').disabled = true;
   setStatus('saving');
   if (reasonKey) toast(t(reasonKey), 'ok');
 
@@ -435,13 +440,13 @@ async function stopRecording(reasonKey) {
     await fetch(`/api/session/${state.sessionId}/finish`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ durationSec, reason: reasonKey }),
+      body: JSON.stringify({ durationSec, reason: reasonKey, skipSummary: Boolean(opts.skipSummary) }),
     });
   } catch (err) {
     toast(t('toast.saveFailed') + (err.message || err), 'err');
   }
 
-  showProcessing();
+  showProcessing(opts.skipSummary ? 'processing.saveDesc' : '');
   $('#recBadge').hidden = true;
   $('#pauseVeil').hidden = true;
   $('#screenFlags').hidden = true;
@@ -455,6 +460,80 @@ async function stopRecording(reasonKey) {
   $('#optQuality').disabled = false;
   $('#optMic').disabled = false;
   $('#hint').textContent = t('hint.stopping');
+}
+
+function showCancelDialog() {
+  if (!state.recording) return;
+  const card = $('#modalCard');
+  card.innerHTML = `
+    <h2>${t('cancel.title')}</h2>
+    <div class="modal-sub">${t('cancel.desc', { dur: fmt(activeSeconds()) })}</div>
+    <div class="modal-actions">
+      <button id="btnKeepRecording" class="ghost">${t('cancel.keep')}</button>
+      <button id="btnSaveOnly" class="ghost">${t('cancel.saveOnly')}</button>
+      <button id="btnDiscard" class="danger">${t('cancel.discard')}</button>
+    </div>`;
+  openModal();
+  $('#btnKeepRecording').addEventListener('click', closeModal);
+  $('#btnSaveOnly').addEventListener('click', () => {
+    closeModal();
+    stopRecording('toast.stoppedByUser', { skipSummary: true });
+  });
+  $('#btnDiscard').addEventListener('click', () => {
+    closeModal();
+    cancelRecording();
+  });
+}
+
+/** 直接丢弃这次录制：停止采集、删掉服务端会话目录、不生成任何文件。 */
+async function cancelRecording() {
+  if (!state.recording && !state.ending) return;
+  state.cancelling = true;
+  state.ending = true;
+  state.recording = false;
+  clearInterval(state.timerId);
+  $('#btnStart').disabled = true;
+  $('#btnPause').disabled = true;
+  $('#btnStop').disabled = true;
+  $('#btnCancel').disabled = true;
+  setStatus('saving');
+
+  try { state.recorder?.stop(); } catch { }
+  await sleep(200);
+  cleanupMedia();
+  state.chunkQueue.length = 0;
+  state.audioQueue.length = 0;
+
+  try { await fetch(`/api/session/${state.sessionId}/abort`, { method: 'POST' }); } catch { }
+  try { state.sse?.close(); } catch { }
+  state.sse = null;
+
+  state.sessionId = null;
+  state.ending = false;
+  state.cancelling = false;
+  state.resultShown = false;
+  state.segCount = 0;
+  state.statusKey = 'idle';
+
+  $('#recBadge').hidden = true;
+  $('#pauseVeil').hidden = true;
+  $('#screenFlags').hidden = true;
+  $('#placeholder').classList.remove('hide');
+  $('#meterFill').style.width = '0%';
+  $('#meterPeak').style.left = '0%';
+  $('#meterLabel').textContent = '-∞ dB';
+  $('#btnStart').disabled = false;
+  $('#btnPause').disabled = true;
+  $('#btnStop').disabled = true;
+  $('#btnCancel').disabled = true;
+  $('#optQuality').disabled = false;
+  $('#optMic').disabled = false;
+  $('#hint').textContent = IS_DESKTOP ? t('hint.desktop') : t('hint.idle');
+  $('#segCount').textContent = t('seg.count', { n: 0 });
+  clearTranscript();
+  $('#transcript').innerHTML = `<div class="empty">${t('empty.transcript')}</div>`;
+  setStatus('idle');
+  toast(t('toast.cancelled'), 'ok');
 }
 
 function cleanupMedia() {
@@ -473,6 +552,7 @@ function cleanupMedia() {
 // ------------------------------------------------------------------ 上传
 
 function enqueueChunk(blob) {
+  if (state.cancelling) return;
   state.chunkQueue.push(blob);
   drainChunks();
 }
@@ -719,9 +799,9 @@ function resetPanels() {
   switchTab('transcript');
 }
 
-function showProcessing() {
+function showProcessing(descKey) {
   const card = $('#modalCard');
-  card.innerHTML = `<h2>${t('processing.title')}</h2><div class="modal-sub">${t('processing.desc')}</div>
+  card.innerHTML = `<h2>${t('processing.title')}</h2><div class="modal-sub">${t(descKey || 'processing.desc')}</div>
     <div class="processing"><div class="spinner"></div><span id="procMsg">${t('status.processing')}</span></div>
     <p class="hint">${t('processing.hint')}</p>`;
   openModal();
@@ -740,17 +820,17 @@ function showResult(result, summary) {
   card.innerHTML = `
     <h2>${esc(result.title || t('result.done'))}</h2>
     <div class="modal-sub">${esc(sub)}</div>
-    ${result.summaryAi === false ? `<div class="warn-box">${t('result.warn', { err: esc(result.summaryError || '') })}</div>` : ''}
+    ${result.summaryError ? `<div class="warn-box">${t('result.warn', { err: esc(result.summaryError) })}</div>` : ''}
     ${result.video ? `<video controls src="${result.video}"${result.poster ? ` poster="${result.poster}"` : ''}></video>` : `<p class="hint">${t('result.noVideo')}</p>`}
     <div class="modal-actions">
       ${result.video ? `<a href="${result.video}" download>${t('result.download')}</a>` : ''}
       <a href="${result.transcript}" target="_blank">${t('result.transcript')}</a>
-      <a href="${result.summary}" target="_blank">${t('result.summary')}</a>
+      ${result.summary ? `<a href="${result.summary}" target="_blank">${t('result.summary')}</a>` : ''}
       <button id="btnRegen" class="ghost">${t('result.regen')}</button>
       <button id="btnOpenFolder" class="ghost">${t('result.openFolder')}</button>
       <button id="btnCloseModal" class="ghost">${t('result.close')}</button>
     </div>
-    <div class="markdown" id="resultSummary">${renderMarkdown(summary || '')}</div>`;
+    <div class="markdown" id="resultSummary">${summary ? renderMarkdown(summary) : `<p class="hint">${t('result.noSummary')}</p>`}</div>`;
   openModal();
   $('#btnCloseModal')?.addEventListener('click', closeModal);
   $('#btnOpenFolder')?.addEventListener('click', async () => {
