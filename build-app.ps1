@@ -28,6 +28,14 @@ New-Item -ItemType Directory -Path (Join-Path $app 'node_modules') -Force | Out-
 # 语音识别原生包不放在 npm 依赖里（避免 npm install 时被当成 extraneous 清掉），统一从 vendor 取
 Copy-Item 'vendor\sherpa-onnx-node', 'vendor\sherpa-onnx-win-x64' (Join-Path $app 'node_modules') -Recurse -Force
 
+# 目标目录若继承了「低完整性级别」或受限 ACL（某些沙箱工具会留下这种目录），
+# 复制进去的 Electron 会启动即崩溃（0x80000003）。复制完统一恢复成普通用户目录。
+$who = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+& icacls.exe $install /inheritance:r | Out-Null
+& icacls.exe $install /grant:r "${who}:(OI)(CI)F" | Out-Null
+& icacls.exe $install /grant "${who}:F" /T /C | Out-Null
+& icacls.exe $install /setintegritylevel Medium /T /C | Out-Null
+
 Write-Host '创建快捷方式…'
 $exe = Join-Path $install 'ScreenRecorder.exe'
 $ws = New-Object -ComObject WScript.Shell
