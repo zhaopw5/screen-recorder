@@ -8,8 +8,8 @@ if (-not (Test-Path (Join-Path $electron 'electron.exe'))) {
   throw '未找到 Electron，请先在本目录运行：npm install'
 }
 
-# Electron 45 在含中文的路径下会启动即崩溃，所以固定装到纯英文目录
-$install = Join-Path $env:LOCALAPPDATA 'Programs\ScreenRecorder'
+# 默认装到源码同级的 ScreenRecorder 目录（纯英文路径，避免 Electron 在中文路径下启动失败）
+$install = Join-Path (Split-Path $root -Parent) 'ScreenRecorder'
 if (Test-Path $install) { Remove-Item $install -Recurse -Force }
 New-Item -ItemType Directory -Path $install | Out-Null
 
