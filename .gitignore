@@ -11,3 +11,6 @@ logs/
 Thumbs.db
 desktop.ini
 *.log
+
+# 本地临时脚本
+_*.mjs
