@@ -67,7 +67,7 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 
 ```bat
 npm run app      :: 开发模式，直接开窗口
-npm run build    :: 打包安装到源码同级目录的 ScreenRecorder 文件夹，并创建桌面快捷方式
+npm run build    :: 打包安装到项目内的 dist\ScreenRecorder，并创建桌面快捷方式
 ```
 
 > 注意：Electron 在含中文的路径下会启动即崩溃，`build-app.ps1` 会固定安装到纯英文目录，请不要手动把 App 挪到中文路径。

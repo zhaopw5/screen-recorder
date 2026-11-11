@@ -67,7 +67,7 @@ Then either:
 
 ```bat
 npm run app      :: run the desktop app in development
-npm run build    :: package and install into the ScreenRecorder folder next to this repo
+npm run build    :: package and install into dist\ScreenRecorder in this repo
 ```
 
 > Electron crashes immediately when launched from a path containing non-ASCII characters, so `build-app.ps1` installs to an ASCII-only directory. Do not move the installed app into a Chinese-named folder.

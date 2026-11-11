@@ -8,8 +8,9 @@ if (-not (Test-Path (Join-Path $electron 'electron.exe'))) {
   throw '未找到 Electron，请先在本目录运行：npm install'
 }
 
-# 默认装到源码同级的 ScreenRecorder 目录（纯英文路径，避免 Electron 在中文路径下启动失败）
-$install = Join-Path (Split-Path $root -Parent) 'ScreenRecorder'
+# 打包产物放在项目内的 dist\ScreenRecorder（ASCII 路径，避免 Electron 在中文路径下启动失败）
+$install = Join-Path $root 'dist\ScreenRecorder'
+New-Item -ItemType Directory -Force -Path (Join-Path $root 'dist') | Out-Null
 if (Test-Path $install) { Remove-Item $install -Recurse -Force }
 New-Item -ItemType Directory -Path $install | Out-Null
 
