@@ -1,6 +1,6 @@
 // Electron 桌面壳：内置本地服务 + 自动选择整个屏幕（含系统声音，WASAPI loopback）。
 // 用户点「开始录制」后不会再弹系统分享框，也不用手动勾「分享系统音频」。
-const { app, BrowserWindow, session, desktopCapturer, screen, shell, dialog, Menu } = require('electron');
+const { app, BrowserWindow, session, desktopCapturer, screen, shell, dialog, Menu, ipcMain } = require('electron');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
@@ -32,6 +32,7 @@ if (!app.requestSingleInstanceLock()) {
       show: false,
       autoHideMenuBar: true,
       webPreferences: {
+        preload: path.join(__dirname, 'preload.cjs'),
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
@@ -48,6 +49,14 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     Menu.setApplicationMenu(null);
+
+    ipcMain.handle('pick-folder', async () => {
+      const options = { title: '选择录屏保存位置', properties: ['openDirectory', 'createDirectory'] };
+      const result = win && !win.isDestroyed()
+        ? await dialog.showOpenDialog(win, options)
+        : await dialog.showOpenDialog(options);
+      return result.canceled ? null : result.filePaths[0];
+    });
 
     serverApi = await import(pathToFileURL(path.join(ROOT, 'server.mjs')).href);
 

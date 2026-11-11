@@ -276,6 +276,10 @@ select {
   border-radius: 10px; padding: 9px 11px; font-size: 13px; outline: none; font-family: inherit;
 }
 .form input:focus { border-color: #33507a; }
+.dir-row { display: flex; gap: 8px; align-items: stretch; }
+.dir-row input { flex: 1; min-width: 0; }
+.dir-row button { white-space: nowrap; padding: 0 14px; }
+.sep { border: 0; border-top: 1px solid var(--line); margin: 16px 0 6px; }
 .dim { color: var(--dim); font-size: 11.5px; }
 .test-result { font-size: 12.5px; line-height: 1.6; margin-top: 8px; white-space: pre-wrap; word-break: break-all; }
 .test-result.ok { color: var(--accent-2); }

@@ -3,18 +3,50 @@
 import http from 'node:http';
 import { readFile, writeFile, mkdir, readdir, stat, appendFile, rm, rename } from 'node:fs/promises';
 import { createWriteStream, createReadStream, existsSync } from 'node:fs';
-import { join, extname, dirname, normalize } from 'node:path';
+import { join, extname, dirname, normalize, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { fork, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { llmConfig, chat, chatStream, saveConfig, publicLlmStatus, importKeyFromDsh, testLlm } from './lib/llm.mjs';
+import { llmConfig, chat, chatStream, saveConfig, publicLlmStatus, importKeyFromDsh, testLlm, readConfigFile, writeConfigFile } from './lib/llm.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, 'public');
-const RECORDINGS = process.env.RECORDINGS_DIR || join(__dirname, 'recordings');
+const DEFAULT_RECORDINGS = process.env.RECORDINGS_DIR || join(__dirname, 'recordings');
 const PORT = Number(process.env.PORT || 8787);
 
-await mkdir(RECORDINGS, { recursive: true });
+/** 当前设置里的保存位置：config.json 的 recordingsDir，没有就用默认目录。 */
+function recordingsRoot() {
+  const d = String(readConfigFile().recordingsDir || '').trim();
+  return d || DEFAULT_RECORDINGS;
+}
+
+/** 当前目录 + 以前用过的目录：改过保存位置后，历史记录仍然能看到旧文件。 */
+function knownRecordingRoots() {
+  const cfg = readConfigFile();
+  const list = [recordingsRoot(), ...(Array.isArray(cfg.recordingsDirs) ? cfg.recordingsDirs : [])];
+  const seen = new Set();
+  const out = [];
+  for (const d of list) {
+    if (!d) continue;
+    const key = String(d).toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (existsSync(d)) out.push(d);
+  }
+  if (!out.length) out.push(DEFAULT_RECORDINGS);
+  return out;
+}
+
+/** 按会话 id 找它所在的目录（兼容切换过保存位置的情况）。 */
+function findSessionDir(id) {
+  for (const root of knownRecordingRoots()) {
+    const p = join(root, id);
+    if (existsSync(p)) return p;
+  }
+  return join(recordingsRoot(), id);
+}
+
+await mkdir(DEFAULT_RECORDINGS, { recursive: true });
 
 const sessions = new Map();
 
@@ -63,7 +95,7 @@ function sseSend(session, obj) {
 
 function createSession() {
   const id = nowId();
-  const dir = join(RECORDINGS, id);
+  const dir = join(recordingsRoot(), id);
   const s = {
     id,
     dir,
@@ -467,7 +499,7 @@ function parseTimecode(t) {
 
 /** 服务器重启后，从磁盘上的 transcript.md 还原一份会话，用来重新生成纪要。 */
 async function loadSessionFromDisk(id) {
-  const dir = join(RECORDINGS, id);
+  const dir = findSessionDir(id);
   if (!existsSync(dir)) return null;
   const tp = join(dir, 'transcript.md');
   if (!existsSync(tp)) return null;
@@ -550,9 +582,10 @@ async function handleApi(req, res, url) {
 
   if (parts[1] === 'config' && method === 'GET') {
     return json(res, 200, {
-      version: '1.2.0',
+      version: '1.5.0',
       llm: publicLlmStatus(),
-      recordings: RECORDINGS,
+      recordings: recordingsRoot(),
+      recordingsDefault: DEFAULT_RECORDINGS,
     });
   }
 
@@ -578,35 +611,77 @@ async function handleApi(req, res, url) {
   if (parts[1] === 'config' && method === 'POST') {
     try {
       const body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
+
+      // 保存位置：验证/创建目录，并把旧目录记下来，保证历史列表不丢
+      if (typeof body.recordingsDir === 'string' && body.recordingsDir.trim()) {
+        const target = resolve(body.recordingsDir.trim());
+        try {
+          await mkdir(target, { recursive: true });
+          await stat(target);
+        } catch (err) {
+          return json(res, 400, { error: `无法使用这个目录（${target}）：${err.message}` });
+        }
+        const cur = readConfigFile();
+        const previous = recordingsRoot();
+        const list = [...(Array.isArray(cur.recordingsDirs) ? cur.recordingsDirs : []), previous];
+        const dedup = [];
+        const seen = new Set();
+        for (const d of list) {
+          if (!d) continue;
+          const key = String(d).toLowerCase();
+          if (key === target.toLowerCase() || seen.has(key)) continue;
+          seen.add(key);
+          dedup.push(d);
+        }
+        writeConfigFile({ ...cur, recordingsDir: target, recordingsDirs: dedup });
+      }
+
       saveConfig(body);
-      return json(res, 200, { ok: true, llm: publicLlmStatus() });
+      return json(res, 200, {
+        ok: true,
+        llm: publicLlmStatus(),
+        recordings: recordingsRoot(),
+      });
     } catch (err) {
       return json(res, 500, { error: String(err.message || err) });
     }
   }
 
   if (parts[1] === 'sessions' && method === 'GET') {
-    const dirs = (await readdir(RECORDINGS, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name).sort().reverse();
-    const list = [];
-    for (const id of dirs.slice(0, 50)) {
+    const roots = knownRecordingRoots();
+    const entries = [];
+    for (const root of roots) {
+      let names = [];
       try {
-        const meta = JSON.parse(await readFile(join(RECORDINGS, id, 'meta.json'), 'utf8'));
-        const hasSummary = existsSync(join(RECORDINGS, id, 'summary.md'));
+        names = (await readdir(root, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name);
+      } catch { }
+      for (const name of names) entries.push({ id: name, root });
+    }
+    const seen = new Set();
+    const list = [];
+    for (const { id, root } of entries) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      try {
+        const meta = JSON.parse(await readFile(join(root, id, 'meta.json'), 'utf8'));
+        const hasSummary = existsSync(join(root, id, 'summary.md'));
         list.push({
           id, title: meta.title || id, createdAt: meta.createdAt, durationSec: meta.durationSec,
-          hasVideo: Boolean(meta.video), segments: meta.segments, hasSummary,
+          hasVideo: Boolean(meta.video), segments: meta.segments, hasSummary, folder: join(root, id),
           video: meta.video ? `/api/session/${id}/file/${encodeURIComponent(meta.video)}` : null,
           summary: hasSummary ? `/api/session/${id}/file/summary.md` : null,
           transcript: `/api/session/${id}/file/transcript.md`,
         });
       } catch {
         // 没有 meta.json 说明没正常收尾，看看有没有分片
-        const chunks = join(RECORDINGS, id, 'chunks');
-        const has = existsSync(chunks) && (await readdir(chunks)).length > 0;
-        if (has) list.push({ id, title: `${id}（未正常结束）`, unfinished: true, createdAt: null, durationSec: 0, segments: 0 });
+        const chunks = join(root, id, 'chunks');
+        let has = false;
+        try { has = existsSync(chunks) && (await readdir(chunks)).length > 0; } catch { }
+        if (has) list.push({ id, title: `${id}（未正常结束）`, unfinished: true, createdAt: null, durationSec: 0, segments: 0, folder: join(root, id) });
       }
     }
-    return json(res, 200, { sessions: list });
+    list.sort((a, b) => String(b.id).localeCompare(String(a.id)));
+    return json(res, 200, { sessions: list.slice(0, 100), dirs: roots });
   }
 
   if (parts[1] === 'session' && parts[2] && parts[3] === 'start' && method === 'POST') {
@@ -739,9 +814,9 @@ async function handleApi(req, res, url) {
   }
 
   if (parts[1] === 'session' && parts[2] && parts[3] === 'open' && method === 'POST') {
-    const dir = session ? session.dir : RECORDINGS;
+    const dir = session ? session.dir : findSessionDir(parts[2]);
     try {
-      spawn('explorer', [join(RECORDINGS, parts[2])], { detached: true, stdio: 'ignore' }).unref();
+      spawn('explorer', [dir], { detached: true, stdio: 'ignore' }).unref();
       return json(res, 200, { ok: true, dir });
     } catch (err) {
       return json(res, 500, { error: err.message });
@@ -749,14 +824,14 @@ async function handleApi(req, res, url) {
   }
 
   if (parts[1] === 'open-recordings' && method === 'POST') {
-    spawn('explorer', [RECORDINGS], { detached: true, stdio: 'ignore' }).unref();
+    spawn('explorer', [recordingsRoot()], { detached: true, stdio: 'ignore' }).unref();
     return json(res, 200, { ok: true });
   }
 
   if (parts[1] === 'session' && parts[2] && parts[3] === 'file' && method === 'GET') {
     const name = decodeURIComponent(parts[4] || '');
     if (!/^[\w.\-\u4e00-\u9fa5]+$/.test(name)) return json(res, 400, { error: 'bad name' });
-    return serveStatic(res, join(RECORDINGS, parts[2], name));
+    return serveStatic(res, join(findSessionDir(parts[2]), name));
   }
 
   return json(res, 404, { error: '未知接口' });
@@ -808,7 +883,7 @@ export function startServer({ port = PORT, open = process.env.NO_OPEN !== '1' } 
       console.log('   录屏助手 已启动');
       console.log('  ----------------------------------------------');
       console.log(`   地址： http://127.0.0.1:${activePort}`);
-      console.log(`   录像： ${RECORDINGS}`);
+      console.log(`   录像： ${recordingsRoot()}`);
       console.log(`   模型： ${cfg.model} @ ${cfg.baseUrl}  ${cfg.apiKey ? '（已读取到密钥）' : '（未找到密钥！）'}`);
       console.log('');
       if (open) {
@@ -820,7 +895,7 @@ export function startServer({ port = PORT, open = process.env.NO_OPEN !== '1' } 
         settled = true;
         resolve({
           port: activePort,
-          recordings: RECORDINGS,
+          recordings: recordingsRoot(),
           server,
           close: () => new Promise((r) => server.close(r)),
         });

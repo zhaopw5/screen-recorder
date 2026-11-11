@@ -819,14 +819,23 @@ async function showHistory() {
 }
 
 async function openSettings() {
-  let llm = {};
-  try { llm = (await (await fetch('/api/config')).json()).llm || {}; } catch { }
+  let cfg = {};
+  try { cfg = await (await fetch('/api/config')).json(); } catch { }
+  const llm = cfg.llm || {};
   const sourceText = { dsh: 'DeepSeek Harness 凭据', config: '本机配置文件', env: '环境变量', none: '还没配置' }[llm.source] || '未知';
   const card = $('#modalCard');
   card.innerHTML = `
-    <h2>AI 设置</h2>
-    <div class="modal-sub">只影响「AI 纪要 / 提问」。录屏和本地转写是离线的，不需要任何密钥。</div>
-    ${llm.source === 'dsh' ? `<div class="warn-box" style="color:#9fd0ff;background:rgba(76,141,255,.08);border-color:rgba(76,141,255,.35)">当前用的是 DeepSeek Harness 的密钥。以后如果要卸载 DSH，点下面「从 DSH 导入密钥」把它复制到本机配置，卸载后 AI 仍然可用。</div>` : ''}
+    <h2>设置</h2>
+    <div class="modal-sub">保存位置只影响之后的新录制；AI 设置只影响「AI 纪要 / 提问」，录屏和本地转写不需要密钥。</div>
+    <div class="form">
+      <label>录屏保存位置 <span class="dim">只影响之后的新录制</span></label>
+      <div class="dir-row">
+        <input id="setDir" value="${esc(cfg.recordings || '')}" spellcheck="false" />
+        ${window.desktop && window.desktop.pickFolder ? '<button type="button" id="btnPickDir" class="ghost">选择…</button>' : ''}
+      </div>
+      <p class="hint">默认：${esc(cfg.recordingsDefault || '')}<br />改位置不会移动已有录像，历史列表仍然能看到它们。</p>
+    </div>
+    <hr class="sep" />
     <div class="form">
       <label>API Key <span class="dim">当前来源：${esc(sourceText)}${llm.keyHint ? ' · ' + esc(llm.keyHint) : ''}</span></label>
       <input id="setKey" type="password" autocomplete="off" placeholder="留空表示不修改；填 sk-... 会保存到本机" />
@@ -845,6 +854,14 @@ async function openSettings() {
     </div>`;
   openModal();
   $('#btnCloseModal').addEventListener('click', closeModal);
+  $('#btnPickDir')?.addEventListener('click', async () => {
+    try {
+      const dir = await window.desktop.pickFolder();
+      if (dir) $('#setDir').value = dir;
+    } catch (err) {
+      toast('选择文件夹失败：' + (err.message || err), 'err');
+    }
+  });
   $('#btnTestLlm')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     const out = $('#testResult');
@@ -903,12 +920,17 @@ async function openSettings() {
           apiKey: $('#setKey').value,
           baseUrl: $('#setBase').value,
           model: $('#setModel').value,
+          recordingsDir: $('#setDir') ? $('#setDir').value : undefined,
         }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
       applyLlmBadge(j.llm);
-      toast(j.llm.ready ? '已保存，AI 可以用了' : '已保存，但还没有密钥', j.llm.ready ? 'ok' : 'err');
+      if (j.recordings) state.recordingsDir = j.recordings;
+      toast(
+        j.llm.ready ? '已保存：新录制会存到上面的位置' : '已保存，但还没有 AI 密钥',
+        j.llm.ready ? 'ok' : 'err',
+      );
       closeModal();
     } catch (err) {
       btn.disabled = false;
