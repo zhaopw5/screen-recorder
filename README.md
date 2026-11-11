@@ -1,52 +1,55 @@
-# 录屏助手 · Screen Recorder AI
+# Screen Recorder AI
 
-**Windows 本地录屏 + 系统声音 + 离线语音转写 + AI 会议纪要。**
-A local-first Windows screen recorder with system-audio capture, offline speech-to-text and AI meeting notes.
+**A local-first Windows screen recorder with system-audio capture, offline speech-to-text and AI meeting notes.**
 
-![桌面版](docs/桌面版.png)
+English | [简体中文](README.zh-CN.md)
 
-录屏的同时把电脑里正在播放的声音（线上会议、视频、直播）一起录下来，本地实时转成文字，并让大模型边录边写纪要；录制过程中可以随时向 AI 提问。音视频不出本机，语音识别完全离线。
+![App](docs/app.png)
 
----
-
-## 功能
-
-- **屏幕 + 系统声音一起录**：基于 WASAPI 环回，不需要「立体声混音」，也不需要装虚拟声卡
-- **一键开始**：桌面版点一下就直接录「当前屏幕」，不弹系统分享框、不用勾选音频
-- **本地实时转写**：SenseVoiceSmall + Silero VAD，纯 CPU、不联网，按停顿自动断句、带时间戳
-- **AI 边录边写纪要**：约每 30 秒合并更新（概览 / 要点 / 结论 / 待办 / 待确认）
-- **随时提问**：基于当前转写和纪要回答，带时间戳
-- **产物齐全**：`recording.mp4`（H.264/AAC，可拖进度条）+ `transcript.md` + `summary.md` + 封面
-- **历史记录**：内置列表，可回看、补生成纪要
-- **两种形态**：Electron 桌面 App，或本地浏览器页面
+Records your screen together with whatever your PC is playing — online meetings, videos, livestreams — transcribes it locally in real time, and has an LLM write meeting notes while recording. You can ask the AI questions mid-recording. Audio and video never leave your machine; speech recognition is fully offline.
 
 ---
 
-## 为什么很多录屏软件录不到「电脑里的声音」
+## Features
 
-Windows 采音频有三条路：
+- **Screen + system audio together**: WASAPI loopback — no "Stereo Mix", no virtual audio driver
+- **One click**: the desktop app starts recording the current screen immediately, with no share picker and no "share system audio" checkbox
+- **Local real-time transcription**: SenseVoiceSmall + Silero VAD, CPU only, offline, sentence segmentation with timestamps
+- **Live AI notes**: refreshed every ~30 s (overview / key points / decisions / action items / open questions)
+- **Ask anytime**: answers are grounded in the transcript and cite timestamps
+- **Complete output**: `recording.mp4` (H.264/AAC, seekable) + `transcript.md` + `summary.md` + poster
+- **History**: built-in list; regenerate notes for any recording
+- **Two shapes**: Electron desktop app, or a local web UI
 
-| 方式 | 拿到的是什么 | 常见问题 |
+---
+
+## Why most screen recorders miss system audio
+
+Windows offers three different ways to capture audio:
+
+| Path | What you get | Typical failure |
 |---|---|---|
-| 录音设备（麦克风） | 物理麦克风的环境声 | 录不到电脑播放的声音 |
-| 立体声混音（Stereo Mix） | 声卡模拟的一个录音设备 | Realtek / Intel / 蓝牙耳机驱动经常默认不提供 |
-| **WASAPI Loopback（环回）** | 系统当前正在播放的音频流 | 不依赖 Stereo Mix，OBS 的「桌面音频」用的就是它 |
+| Recording device (microphone) | Room audio from a physical mic | Cannot capture what the PC is playing |
+| Stereo Mix | A virtual input device exposed by the audio driver | Realtek / Intel / Bluetooth drivers often do not expose it |
+| **WASAPI loopback** | The audio stream the system is currently rendering | No Stereo Mix needed; this is what OBS's "Desktop Audio" uses |
 
-本项目走第三条路：Electron 主进程通过 `setDisplayMediaRequestHandler` 直接返回「屏幕 + `audio: 'loopback'`」，因此既不用手动勾选，也不会退化成麦克风。
+This project takes the third path: the Electron main process returns the screen plus `audio: 'loopback'` from `setDisplayMediaRequestHandler`, so there is nothing to tick, and it never silently falls back to the microphone.
 
-> 受 DRM 保护的内容（Netflix 等）系统层面就禁止采集，录不到属正常。
-
----
-
-## 环境要求
-
-- Windows 10 / 11（x64）
-- Node.js 20+（仅构建 / 开发需要；打包后的 App 自带运行时）
-- 磁盘：源码 + 依赖约 1 GB（含 228 MB 语音模型、110 MB ffmpeg、Electron）
+> DRM-protected content (Netflix, etc.) is blocked by Windows itself and cannot be captured.
 
 ---
 
-## 快速开始
+## Requirements
+
+- Windows 10 / 11 (x64)
+- Node.js 20+ (build/development only — the packaged app bundles its own runtime)
+- ~1 GB of disk for source + dependencies (228 MB speech model, 110 MB ffmpeg, Electron)
+
+The UI is currently in Chinese.
+
+---
+
+## Quick start
 
 ```bat
 git clone https://github.com/zhaopw5/screen-recorder.git
@@ -56,79 +59,76 @@ npm install
 powershell -ExecutionPolicy Bypass -File setup.ps1
 ```
 
-`setup.ps1` 会准备两样不进仓库的东西：
+`setup.ps1` prepares the two things that are not committed to the repository:
 
-- `models/`：SenseVoiceSmall int8 + Silero VAD（约 228 MB，优先从 HuggingFace 镜像下载；如果你装过 DeepSeek Harness，会直接复用它的缓存）
-- `bin/ffmpeg.exe`（约 110 MB，可选；只用于补时长和抽封面）
+- `models/` — SenseVoiceSmall int8 + Silero VAD (~228 MB). It first tries the HuggingFace mirror, and reuses an existing DeepSeek Harness cache if present.
+- `bin/ffmpeg.exe` (~110 MB, optional; only used to write WebM duration and extract posters)
 
-然后任选一种运行方式：
+Then either:
 
 ```bat
-npm run app      :: 开发模式，直接开窗口
-npm run build    :: 打包安装到 %LOCALAPPDATA%\Programs\ScreenRecorder，并创建桌面快捷方式
+npm run app      :: run the desktop app in development
+npm run build    :: package and install to %LOCALAPPDATA%\Programs\ScreenRecorder
 ```
 
-> 注意：Electron 在含中文的路径下会启动即崩溃，`build-app.ps1` 会固定安装到纯英文目录，请不要手动把 App 挪到中文路径。
+> Electron crashes immediately when launched from a path containing non-ASCII characters, so `build-app.ps1` installs to an ASCII-only directory. Do not move the installed app into a Chinese-named folder.
 
-### 浏览器模式（备用）
+### Browser mode
 
 ```bat
 npm start
 ```
 
-打开 `http://127.0.0.1:8787`，选择「整个屏幕」并勾选「同时分享系统音频」。功能与桌面版一致，只是多一步手动选择。
+Open `http://127.0.0.1:8787`, choose **Entire screen**, and tick **Share system audio**. Same features, one extra manual step.
 
 ---
 
-## 使用
+## Usage
 
-1. 双击桌面「录屏助手」
-2. 点 **开始录制**
-3. 会议 / 视频结束后点 **结束并生成纪要**，等 10~60 秒
+1. Launch **Screen Recorder AI** from the desktop shortcut
+2. Click **Start recording**
+3. When the meeting is over, click **Stop & generate notes** and wait 10–60 s
 
-录制中右侧三个面板：
+Three panels on the right:
 
-| 面板 | 作用 |
+| Panel | What it does |
 |---|---|
-| 实时字幕 | 按停顿断句，延迟约 1~3 秒 |
-| AI 纪要 | 每约 30 秒刷新一次 |
-| 提问 | 「刚才说的预算是多少？」「总结一下前十分钟」 |
+| Live transcript | Sentence-level segments with timestamps, ~1–3 s latency |
+| AI notes | Refreshed roughly every 30 s |
+| Ask | e.g. "What was the budget?" / "Summarize the last ten minutes" |
 
-产物默认在 `C:\Users\<你>\Videos\录屏助手\<时间戳>\`：
+Output goes to `C:\Users\<you>\Videos\录屏助手\<timestamp>\` by default:
 
 ```
-recording.mp4    录像
-poster.jpg       封面
-transcript.md    逐字稿（带时间戳）
-summary.md       会议纪要
-meta.json        元数据
+recording.mp4    video
+poster.jpg       cover image
+transcript.md    timestamped transcript
+summary.md       meeting notes
+meta.json        metadata
 ```
 
-建议戴耳机：外放会被麦克风二次录入，转写出现重复。
+Headphones are recommended: with speakers, the microphone picks up the audio again and the transcript gets duplicated.
 
 ---
 
-## 配置
+## Configuration
 
-### 录屏保存位置
+### Recording location
 
-点右上角 **设置**，在「录屏保存位置」里直接输入路径，或点 **选择…** 挑一个文件夹（桌面版会弹系统文件夹选择框）。
+**Settings → Recording location**: type a path or click **Choose…** to pick a folder.
 
-- 只影响**之后的新录制**，已有录像不会被移动
-- 改过位置后，历史列表仍然会扫描旧目录，旧录像不会消失
-- 默认位置：`C:\Users\<你>\Videos\录屏助手`
+- Applies to **new recordings only**; existing files are not moved
+- The history list still scans old directories, so nothing disappears
+- Default: `C:\Users\<you>\Videos\录屏助手`
+- Stored as `recordingsDir` in `%APPDATA%\录屏助手\config.json`
 
-对应 `%APPDATA%\录屏助手\config.json` 里的 `recordingsDir`（旧目录记录在 `recordingsDirs`）。
+### AI model
 
-### AI 模型
+**Settings → API Key / Base URL / Model**, then **Test connection** before saving.
 
-点右上角 **设置** 填 API Key / 接口地址 / 模型名，点 **测试连接** 验证后保存。密钥保存在本机：
+Any OpenAI-compatible endpoint works, including a local Ollama (`http://127.0.0.1:11434/v1`).
 
-```
-%APPDATA%\录屏助手\config.json
-```
-
-也可以使用环境变量（优先级更高）：
+Environment variables take precedence:
 
 ```bat
 set REC_API_KEY=sk-xxxx
@@ -136,100 +136,98 @@ set REC_BASE_URL=https://api.deepseek.com
 set REC_MODEL=deepseek-chat
 ```
 
-接口只要是 OpenAI 兼容的即可，包括本地 Ollama（`http://127.0.0.1:11434/v1`）。
+`OPENAI_API_KEY` / `OPENAI_BASE_URL` are intentionally **not** read — those are usually set by other tools and mixing them with a DeepSeek endpoint causes 401s.
 
-> 不会读取 `OPENAI_API_KEY` / `OPENAI_BASE_URL`——这两个变量常被其他软件占用，混用会导致 401。
+Without a key, recording and local transcription still work; only AI notes and Q&A are disabled.
 
-没有配置密钥时，录屏和本地转写照常，只是没有 AI 纪要和问答。
+### Speech models
 
-### 语音模型位置
-
-优先 `SENSEVOICE_MODEL_DIR` 环境变量 → 自带 `models/` → `~/.dsh/speech-to-text/sensevoice/models`。
+Lookup order: `SENSEVOICE_MODEL_DIR` → bundled `models/` → `~/.dsh/speech-to-text/sensevoice/models`.
 
 ---
 
-## 工作原理
+## How it works
 
 ```
-Electron 窗口（内置 Chromium）
+Electron window (bundled Chromium)
   │
-  ├─ 主进程 setDisplayMediaRequestHandler
-  │     desktopCapturer 取窗口所在屏幕 + audio:'loopback'   ← WASAPI 环回
+  ├─ main process: setDisplayMediaRequestHandler
+  │     desktopCapturer → screen under the window + audio:'loopback'   ← WASAPI loopback
   │
-  └─ 页面 getDisplayMedia
-        ├─ MediaRecorder(MP4 / H.264 + AAC) ──每 4 秒──▶ POST /api/session/:id/chunk
-        └─ AudioWorklet 48k→16k 单声道 PCM ──每 1 秒──▶ POST /api/session/:id/audio
-                                                              │
-                                                   子进程 sherpa-onnx
-                                                   Silero VAD 切句 → SenseVoice 识别
-                                                              │
-                                                   SSE /events → 实时字幕
-                                                              │
-                                              大模型（每 30s 合并纪要 / 流式问答）
+  └─ renderer: getDisplayMedia
+        ├─ MediaRecorder (MP4 / H.264 + AAC) ── every 4 s ──▶ POST /api/session/:id/chunk
+        └─ AudioWorklet 48 kHz → 16 kHz mono PCM ── every 1 s ──▶ POST /api/session/:id/audio
+                                                                     │
+                                                           child process: sherpa-onnx
+                                                           Silero VAD → SenseVoice
+                                                                     │
+                                                           SSE /events → live transcript
+                                                                     │
+                                                     LLM (rolling notes / streaming Q&A)
 ```
 
-- 前端：原生 JS + Web Audio + MediaRecorder，无框架、无构建
-- 后端：Node 原生 `http`，无第三方依赖；`startServer()` 同时供桌面版和浏览器版复用
-- 识别：sherpa-onnx + SenseVoiceSmall int8 + Silero VAD，纯 CPU
-- 收尾：ffmpeg 无损重封装（修 WebM 缺时长）+ 抽封面
+- Frontend: plain JS + Web Audio + MediaRecorder, no framework, no build step
+- Backend: Node's native `http`, no third-party runtime dependencies; `startServer()` is shared by the desktop and browser modes
+- ASR: sherpa-onnx + SenseVoiceSmall int8 + Silero VAD, CPU only
+- Post-processing: ffmpeg remux (fixes missing WebM duration) + poster extraction
 
 ---
 
-## 常见问题
+## FAQ
 
-| 现象 | 解决 |
+| Symptom | Fix |
 |---|---|
-| 桌面版双击闪退 | 检查安装路径是否含中文；重新运行 `npm run build` |
-| 录制没有声音 | 看音量条是否跳动；确认输出设备正确、会议软件没静音 |
-| 播放器显示 0:00 | 装了 ffmpeg 会自动修复；没有 ffmpeg 时用 Chrome/Edge 播放 |
-| AI 报 401 | 设置里点「测试连接」；确认 Key 与接口地址是同一家 |
-| 纪要显示“本地自动摘录” | AI 调用失败时的兜底，点「重新生成纪要」重试 |
-| 端口被占用 | 服务会自动尝试 8788、8789… |
+| Desktop app closes instantly | Check the install path for non-ASCII characters; re-run `npm run build` |
+| Recording has no sound | Watch the level meter; check the output device and that the meeting app is not muted |
+| Player shows 0:00 | ffmpeg fixes this automatically; without it, play in Chrome/Edge |
+| AI returns 401 | Use **Test connection**; make sure the key and base URL belong to the same provider |
+| Notes say "本地自动摘录" | That is the offline fallback; click **Regenerate notes** to retry |
+| Port already in use | The server automatically tries 8788, 8789, … |
 
 ---
 
-## 隐私
+## Privacy
 
-- 音视频、逐字稿、纪要全部写在本机
-- 语音识别完全离线
-- 只有「转写文字」会发送给你配置的大模型接口（用于纪要和问答）
-- 不包含任何遥测
-
----
-
-## 已知限制
-
-- 一次只录一个屏幕（录「窗口所在的那块屏」）
-- 没有说话人分离（不区分谁在说）
-- 窗口关闭会中断录制（分片保留在磁盘，但不会自动合并）
-- 仅在 Windows 上测试过；macOS/Linux 的屏幕音频需要另行适配
-- 受 DRM 保护的画面/声音无法录制
+- Video, audio, transcripts and notes stay on your machine
+- Speech recognition is fully offline
+- Only the transcribed **text** is sent to the LLM endpoint you configure
+- No telemetry
 
 ---
 
-## 目录结构
+## Limitations
+
+- One screen at a time (the display containing the app window)
+- No speaker diarization
+- Closing the window interrupts recording (chunks remain on disk but are not merged automatically)
+- Windows only; macOS/Linux would need a different screen-audio path
+- DRM-protected content cannot be captured
+- The UI is Chinese-only for now
+
+---
+
+## Project layout
 
 ```
 screen-recorder/
-├── electron/main.cjs     # Electron 主进程（窗口 + 自动选屏 + loopback）
-├── server.mjs            # 本地服务（HTTP + SSE + 会话 + AI 调度）
-├── lib/                  # ASR 封装、识别子进程、大模型调用
-├── public/               # 前端（无需构建）
-├── vendor/               # sherpa-onnx 运行时（Apache-2.0）
+├── electron/main.cjs     # window, auto screen selection, loopback audio
+├── server.mjs            # local HTTP + SSE server, sessions, AI orchestration
+├── lib/                  # ASR wrapper, worker, LLM client
+├── public/               # frontend (no build step)
+├── vendor/               # sherpa-onnx runtime (Apache-2.0)
 ├── assets/icon.ico
-├── setup.ps1             # 下载模型 / ffmpeg
-├── build-app.ps1         # 打包安装
-├── 启动录屏助手.cmd       # 浏览器模式入口
+├── setup.ps1             # download models / ffmpeg
+├── build-app.ps1         # package and install
 └── docs/
 ```
 
 ---
 
-## 第三方组件
+## Third-party components
 
-见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。主要包括 sherpa-onnx（Apache-2.0）、Silero VAD（MIT）、FFmpeg（LGPL/GPL，运行时下载）、SenseVoice 模型（遵循上游许可）。
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Mainly sherpa-onnx (Apache-2.0), Silero VAD (MIT), FFmpeg (LGPL/GPL, downloaded at setup time) and the SenseVoice model (follow upstream terms).
 
-本项目与 DeepSeek / DeepSeek Harness 无隶属关系。
+This project is not affiliated with DeepSeek or DeepSeek Harness.
 
 ## License
 

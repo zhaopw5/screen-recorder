@@ -3,7 +3,7 @@
   "version": "1.5.0",
   "private": true,
   "type": "module",
-  "description": "Windows 录屏 + 系统声音 + 本地 SenseVoice 转写 + AI 会议纪要",
+  "description": "Local-first Windows screen recorder with system audio (WASAPI loopback), offline SenseVoice transcription and AI meeting notes.",
   "main": "electron/main.cjs",
   "repository": {
     "type": "git",
